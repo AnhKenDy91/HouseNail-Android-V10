@@ -2096,7 +2096,7 @@ class MainActivity : ComponentActivity() {
                             refresh++
                         } finally { saving=false }
                     }
-                }){Text("Xác nhận")},
+                }){Text("Xác nhận")}},
                 dismissButton={TextButton(onClick={pending=null}){Text("Hủy")}})
         }
         LazyColumn(contentPadding=PaddingValues(16.dp),
