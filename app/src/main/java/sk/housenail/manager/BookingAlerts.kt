@@ -13,6 +13,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.work.Configuration
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -36,6 +37,26 @@ import java.util.concurrent.TimeUnit
  * Tokens are never logged, embedded in the APK or sent to non-HouseNail endpoints.
  */
 object BookingAlerts {
+    // WorkManager auto-initialization can be unavailable on some Android ROMs.
+    // Keep notification scheduling optional; never crash login or startup.
+    private fun safeWorkManager(context: Context): WorkManager? {
+        val ctx = context.applicationContext
+        return try {
+            WorkManager.getInstance(ctx)
+        } catch (initialError: IllegalStateException) {
+            try {
+                WorkManager.initialize(ctx, Configuration.Builder().build())
+                WorkManager.getInstance(ctx)
+            } catch (e: Exception) {
+                android.util.Log.e("HouseNailAlerts", "WorkManager unavailable", e)
+                null
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("HouseNailAlerts", "WorkManager unavailable", e)
+            null
+        }
+    }
+
     const val PERMISSION_CODE = 4104
     private const val PREF = "housenail_booking_alerts_v1"
     private const val CHANNEL_ID = "housenail_bookings_new_v1"
@@ -103,7 +124,7 @@ object BookingAlerts {
         val request = PeriodicWorkRequestBuilder<BookingAlertWorker>(15, TimeUnit.MINUTES)
             .setConstraints(constraints)
             .build()
-        WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(
+        safeWorkManager(ctx)?.enqueueUniquePeriodicWork(
             WORK_NAME, ExistingPeriodicWorkPolicy.KEEP, request
         )
         initializeFcmAndSync(ctx)
@@ -118,7 +139,7 @@ object BookingAlerts {
         if (value && loggedIn(ctx)) {
             start(ctx)
         } else {
-            WorkManager.getInstance(ctx).cancelUniqueWork(WORK_NAME)
+            safeWorkManager(ctx)?.cancelUniqueWork(WORK_NAME)
         }
     }
 
@@ -135,14 +156,14 @@ object BookingAlerts {
         }
         prefs(ctx).edit().putBoolean(KEY_ACTIVE, false).remove(KEY_SERVER_TOKEN)
             .remove(KEY_SEEN).remove(KEY_PRIMED).apply()
-        WorkManager.getInstance(ctx).cancelUniqueWork(WORK_NAME)
+        safeWorkManager(ctx)?.cancelUniqueWork(WORK_NAME)
     }
 
     fun markLoggedOut(context: Context) {
         val ctx = context.applicationContext
         prefs(ctx).edit().putBoolean(KEY_ACTIVE, false).remove(KEY_SERVER_TOKEN)
             .remove(KEY_SEEN).remove(KEY_PRIMED).apply()
-        WorkManager.getInstance(ctx).cancelUniqueWork(WORK_NAME)
+        safeWorkManager(ctx)?.cancelUniqueWork(WORK_NAME)
     }
 
     /** First run: snapshot silently; subsequent scans alert only on unseen booking IDs. */
