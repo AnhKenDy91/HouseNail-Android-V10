@@ -2427,8 +2427,104 @@ class MainActivity : ComponentActivity() {
     private fun MoreScreen(p: Palette) {
         var confirmLogout by remember { mutableStateOf(false) }
         var newBookingAlertsEnabled by remember { mutableStateOf(BookingAlerts.enabled(this@MainActivity)) }
+        var wallet by remember { mutableStateOf<JSONObject?>(null) }
+        var otp by remember { mutableStateOf<JSONObject?>(null) }
+        var settingsError by remember { mutableStateOf<String?>(null) }
+        var settingsBusy by remember { mutableStateOf(false) }
+        var settingsRefresh by remember { mutableIntStateOf(0) }
+        var otpPending by remember { mutableStateOf<Boolean?>(null) }
+        LaunchedEffect(settingsRefresh) {
+            settingsBusy = true
+            settingsError = null
+            try {
+                wallet = withContext(Dispatchers.IO) { api.call("adminBulkGateBalance", JSONArray()) }
+                otp = withContext(Dispatchers.IO) { api.call("adminSmsOtpStatus", JSONArray()) }
+            } catch (_: ApiClient.AuthException) {
+                settingsError = "Phiên đăng nhập đã hết hạn."
+                openLogin()
+            } catch (e: Exception) {
+                settingsError = e.message ?: "Không đọc được cài đặt máy chủ."
+            } finally { settingsBusy = false }
+        }
+        if (otpPending != null) {
+            val next = otpPending!!
+            AlertDialog(
+                onDismissRequest = { otpPending = null },
+                title = { Text(if (next) "Bật xác thực OTP?" else "Tắt xác thực OTP?") },
+                text = { Text("Thay đổi này áp dụng cho khách đặt lịch trên website.") },
+                confirmButton = { TextButton(onClick = {
+                    otpPending = null
+                    lifecycleScope.launch {
+                        settingsBusy = true
+                        try {
+                            withContext(Dispatchers.IO) {
+                                api.call("adminSetSmsOtpEnabled", JSONArray().put(next))
+                            }
+                            settingsRefresh++
+                        } catch (e: Exception) {
+                            settingsError = e.message ?: "Không lưu được OTP."
+                        } finally { settingsBusy = false }
+                    }
+                }) { Text("Xác nhận") } },
+                dismissButton = { TextButton(onClick = { otpPending = null }) { Text("Hủy") } }
+            )
+        }
         LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(17.dp)) {
+            item {
+                Text("Thiết lập quản lý  ·  HOUSE NAIL V21.7", fontSize = 16.sp,
+                    color = Color(0xFF226C55), fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val credit = wallet?.optDouble("credit", Double.NaN)
+                    val free = wallet?.optInt("freeMessages", -1) ?: -1
+                    val remaining = wallet?.optInt("estimatedSmsRemaining", -1) ?: -1
+                    listOf(
+                        "Số dư ví" to (if (credit != null && !credit.isNaN()) String.format(Locale.US, "%.2f credits", credit) else "—"),
+                        "SMS miễn phí" to (if (free >= 0) free.toString() else "—"),
+                        "SMS có thể gửi" to (if (remaining >= 0) remaining.toString() else "—")
+                    ).forEach { (label, value) ->
+                        Card(modifier = Modifier.weight(1f).height(125.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE7F0EC))) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                                Text(label, color = Color(0xFF255A4D), fontSize = 12.sp)
+                                Spacer(Modifier.height(20.dp))
+                                Text(value, color = Color(0xFF174D3E), fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+                if (settingsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (settingsError != null) Text(settingsError!!,
+                    color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+            }
+            item {
+                SettingsGroup(p, "Quản lý BulkGate") {
+                    LabelLine(p, "Giá mỗi SMS",
+                        wallet?.optString("pricePerSms", "—") ?: "—")
+                    LabelLine(p, "Ngưỡng cảnh báo",
+                        wallet?.optString("lowCreditThreshold", "—") ?: "—")
+                    Text("Số dư, giá SMS và cảnh báo được đọc từ website. Không lưu khóa BulkGate trên thiết bị.",
+                        fontSize = 12.sp, color = p.secondary)
+                    OutlinedButton(onClick = { settingsRefresh++ },
+                        modifier = Modifier.fillMaxWidth()) { Text("Tải lại số dư và trạng thái") }
+                }
+            }
+            item {
+                SettingsGroup(p, "Kích hoạt tin nhắn OTP") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Xác thực số điện thoại khi khách đặt lịch",
+                            modifier = Modifier.weight(1f), fontSize = 13.sp, color = p.ink)
+                        Switch(checked = otp?.optBoolean("enabled", false) ?: false,
+                            enabled = otp != null && !settingsBusy,
+                            onCheckedChange = { otpPending = it })
+                    }
+                    Text(if (otp?.optBoolean("enabled", false) == true)
+                        "OTP đang bật trên website" else "OTP đang tắt hoặc chưa xác minh",
+                        color = p.secondary, fontSize = 12.sp)
+                }
+            }
             item {
                 VIPPanel(p) {
                     Text("HOUSE NAIL • CONCIERGE", fontSize = 10.sp, fontFamily = FontFamily.Serif,
