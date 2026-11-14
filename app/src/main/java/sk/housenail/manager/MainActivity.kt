@@ -500,7 +500,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun V10TabBar(p: Palette) {
-        val labels = listOf("Tổng quan", "Lịch hẹn", "Quét QR", "Khách hàng", "Thêm")
+        val labels = listOf("Trang chủ", "Lịch", "Quét QR", "Khách", "Cài đặt")
         val icons = listOf(Icons.Default.GridView, Icons.Default.CalendarMonth, Icons.Default.QrCodeScanner, Icons.Default.Groups, Icons.Default.Tune)
         Surface(color = p.surface, shadowElevation = 6.dp) {
             Row(
@@ -2434,9 +2434,9 @@ class MainActivity : ComponentActivity() {
                     Text("HOUSE NAIL • CONCIERGE", fontSize = 10.sp, fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.SemiBold, letterSpacing = 2.4.sp, color = p.accent)
                     Spacer(Modifier.height(10.dp))
-                    Text("Tùy chỉnh & quản trị", fontSize = 23.sp, fontFamily = FontFamily.Serif,
+                    Text("Cài đặt", fontSize = 23.sp, fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.SemiBold, color = p.ink)
-                    Text("Bảo mật, thông báo, đồng bộ và báo cáo — một nơi.", fontSize = 14.sp,
+                    Text("Quản lý HouseNail · Đồng bộ với iPhone", fontSize = 14.sp,
                         color = p.secondary)
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment=Alignment.CenterVertically){
@@ -2511,7 +2511,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                SettingsGroup(p,"Kiểm tra kết nối · Build 20") {
+                SettingsGroup(p,"Kiểm tra kết nối") {
                     TextButton(onClick={screen="diagnostics"},modifier=Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.NetworkCheck,null,tint=p.accent)
                         Spacer(Modifier.width(8.dp))
