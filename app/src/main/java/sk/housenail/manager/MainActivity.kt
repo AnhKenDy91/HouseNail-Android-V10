@@ -2476,11 +2476,15 @@ class MainActivity : ComponentActivity() {
         var settingsBusy by remember { mutableStateOf(false) }
         var settingsRefresh by remember { mutableIntStateOf(0) }
         var otpPending by remember { mutableStateOf<Boolean?>(null) }
+        var smsPrice by remember { mutableStateOf("") }
+        var smsThreshold by remember { mutableStateOf("") }
         LaunchedEffect(settingsRefresh) {
             settingsBusy = true
             settingsError = null
             try {
                 wallet = withContext(Dispatchers.IO) { api.call("adminBulkGateBalance", JSONArray()) }
+                smsPrice = if (wallet!!.isNull("pricePerSms")) "" else wallet!!.optString("pricePerSms")
+                smsThreshold = wallet!!.optString("lowCreditThreshold")
                 otp = withContext(Dispatchers.IO) { api.call("adminSmsOtpStatus", JSONArray()) }
             } catch (_: ApiClient.AuthException) {
                 settingsError = "Phiên đăng nhập đã hết hạn."
@@ -2546,10 +2550,41 @@ class MainActivity : ComponentActivity() {
             }
             item {
                 SettingsGroup(p, "Quản lý BulkGate") {
-                    LabelLine(p, "Giá mỗi SMS",
-                        wallet?.optString("pricePerSms", "—") ?: "—")
-                    LabelLine(p, "Ngưỡng cảnh báo",
-                        wallet?.optString("lowCreditThreshold", "—") ?: "—")
+                    OutlinedTextField(value = smsPrice, onValueChange = { smsPrice = it },
+                        label = { Text("Giá mỗi SMS") }, singleLine = true,
+                        enabled = wallet != null && !settingsBusy, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = smsThreshold, onValueChange = { smsThreshold = it },
+                        label = { Text("Ngưỡng cảnh báo") }, singleLine = true,
+                        enabled = wallet != null && !settingsBusy, modifier = Modifier.fillMaxWidth())
+                    Button(onClick = {
+                        val price = smsPrice.trim().replace(',', '.').takeIf { it.isNotEmpty() }?.toDoubleOrNull()
+                        val threshold = smsThreshold.trim().replace(',', '.').toDoubleOrNull()
+                        if ((smsPrice.isNotBlank() && (price == null || !price.isFinite() || price <= 0.0)) ||
+                            threshold == null || !threshold.isFinite() || threshold < 0.0) {
+                            settingsError = "Giá SMS phải lớn hơn 0; ngưỡng cảnh báo không được âm."
+                        } else {
+                            lifecycleScope.launch {
+                                settingsBusy = true
+                                settingsError = null
+                                try {
+                                    val payload = JSONObject().put("pricePerSms", price ?: JSONObject.NULL)
+                                        .put("lowCreditThreshold", threshold)
+                                    withContext(Dispatchers.IO) {
+                                        api.call("adminSetBulkGateMonitorPrefs", JSONArray().put(payload))
+                                    }
+                                    val verified = withContext(Dispatchers.IO) {
+                                        api.call("adminBulkGateBalance", JSONArray())
+                                    }
+                                    wallet = verified
+                                    smsPrice = if (verified.isNull("pricePerSms")) "" else verified.optString("pricePerSms")
+                                    smsThreshold = verified.optString("lowCreditThreshold")
+                                } catch (e: Exception) {
+                                    settingsError = "Chưa xác minh được thay đổi: " + (e.message ?: "Lỗi kết nối")
+                                } finally { settingsBusy = false }
+                            }
+                        }
+                    }, enabled = wallet != null && !settingsBusy,
+                        modifier = Modifier.fillMaxWidth()) { Text("Lưu cài đặt SMS") }
                     Text("Số dư, giá SMS và cảnh báo được đọc từ website. Không lưu khóa BulkGate trên thiết bị.",
                         fontSize = 12.sp, color = p.secondary)
                     OutlinedButton(onClick = { settingsRefresh++ },
