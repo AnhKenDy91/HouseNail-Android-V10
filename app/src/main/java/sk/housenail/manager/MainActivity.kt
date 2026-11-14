@@ -2503,7 +2503,9 @@ class MainActivity : ComponentActivity() {
                             withContext(Dispatchers.IO) {
                                 api.call("adminSetSmsOtpEnabled", JSONArray().put(next))
                             }
-                            settingsRefresh++
+                            val verified = withContext(Dispatchers.IO) { api.call("adminSmsOtpStatus", JSONArray()) }
+                            otp = verified
+                            if (verified.optBoolean("enabled") != next) settingsError = "Trạng thái OTP khác với yêu cầu; đã tải trạng thái mới nhất."
                         } catch (e: Exception) {
                             settingsError = e.message ?: "Không lưu được OTP."
                         } finally { settingsBusy = false }
@@ -2560,7 +2562,7 @@ class MainActivity : ComponentActivity() {
                         Text("Xác thực số điện thoại khi khách đặt lịch",
                             modifier = Modifier.weight(1f), fontSize = 13.sp, color = p.ink)
                         Switch(checked = otp?.optBoolean("enabled", false) ?: false,
-                            enabled = otp != null && !settingsBusy,
+                            enabled = otp != null && !settingsBusy && (!otp!!.optBoolean("enabled") || (otp!!.optBoolean("configured") && otp!!.optString("provider") == "BulkGate")),
                             onCheckedChange = { otpPending = it })
                     }
                     Text(if (otp?.optBoolean("enabled", false) == true)
