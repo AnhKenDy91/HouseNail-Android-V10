@@ -504,10 +504,15 @@ class MainActivity : ComponentActivity() {
             tab == 1 -> "Lịch hẹn"
             tab == 2 -> "Quét QR"
             tab == 3 -> "Khách hàng"
-            else -> "Thêm"
+            else -> "Cài đặt"
         }
         CenterAlignedTopAppBar(
-            title = { Text(title, fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold) },
+            title = {
+                Column {
+                    Text("HOUSE NAIL · MANAGER", fontSize = 10.sp, letterSpacing = 2.sp, color = p.accent)
+                    Text(title, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, color = p.ink)
+                }
+            },
             navigationIcon = {
                 if (selectedBooking != null || selectedMember != null || screen != "main") {
                     IconButton(onClick = {
@@ -539,7 +544,7 @@ class MainActivity : ComponentActivity() {
         val icons = listOf(Icons.Default.GridView, Icons.Default.CalendarMonth, Icons.Default.QrCodeScanner, Icons.Default.Groups, Icons.Default.Tune)
         Surface(color = p.surface, shadowElevation = 6.dp) {
             Row(
-                Modifier.fillMaxWidth().navigationBarsPadding().height(61.dp)
+                Modifier.fillMaxWidth().navigationBarsPadding().height(83.dp)
                     .border(.5.dp, p.border),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
@@ -547,18 +552,21 @@ class MainActivity : ComponentActivity() {
                 labels.forEachIndexed { i, label ->
                     val active = tab == i && selectedBooking == null && selectedMember == null && screen == "main"
                     Column(
-                        Modifier.weight(1f).fillMaxHeight().clickable {
+                        Modifier.weight(1f).fillMaxHeight().padding(horizontal = 3.dp, vertical = 4.dp)
+                            .clip(RoundedCornerShape(17.dp))
+                            .background(if (active) Color(0xFFDFECE7) else p.surface)
+                            .border(1.dp, if (active) Color(0xFFAAC9BD) else p.border, RoundedCornerShape(17.dp)).clickable {
                             tab = i
                             screen = "main"
                             selectedBooking = null
                             selectedMember = null
                             if (i == 3 && members.isEmpty()) loadMembers()
-                        }.padding(top = 8.dp, bottom = 6.dp),
+                        }.padding(top = 10.dp, bottom = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
-                        Icon(icons[i], label, modifier = Modifier.size(22.dp), tint = if (active) p.accent else p.secondary)
-                        Text(label, fontSize = 10.sp, maxLines = 1, color = if (active) p.accent else p.secondary, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+                        Icon(icons[i], label, modifier = Modifier.size(27.dp), tint = if (active) p.accent else p.secondary)
+                        Text(label, fontSize = 11.sp, maxLines = 1, color = if (active) p.accent else p.secondary, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
                     }
                 }
             }
@@ -675,7 +683,7 @@ class MainActivity : ComponentActivity() {
     private fun VIPHero(p: Palette) {
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(29.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF2E2629), Color(0xFF5C4047))))
+                .background(Brush.linearGradient(listOf(Color(0xFF2E2629), p.accent)))
         ) {
             Canvas(Modifier.matchParentSize()) {
                 val w = size.width
@@ -983,7 +991,7 @@ class MainActivity : ComponentActivity() {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text("LỊCH HẸN · HOUSE NAIL", fontSize = 10.sp, letterSpacing = 2.4.sp,
                                 color = p.accent, fontWeight = FontWeight.SemiBold)
-                            Text("Mỗi lịch, một sự chăm sóc", fontSize = 22.sp,
+                            Text("Lịch hẹn trong ngày", fontSize = 22.sp,
                                 fontFamily = FontFamily.Serif, color = p.ink)
                         }
                         Icon(Icons.Default.Event, null, tint = p.champagne, modifier = Modifier.size(26.dp))
@@ -3067,7 +3075,7 @@ class MainActivity : ComponentActivity() {
     private fun palette(name: String) = if (name == "obsidian") {
         Palette(Color(0xFF0F1113), Color(0xFF1F2126), Color(0xFFF5EFE3), Color(0xFFD6B378), Color(0xFFD6B070), Color(0xFFB9ACA4), Color(0x665C514A))
     } else {
-        Palette(Color(0xFFFBF9F6), Color.White, Color(0xFF382B33), Color(0xFF8F6E45), Color(0xFFC29966), Color(0xFF7E6F68), Color(0x40C29966))
+        Palette(Color(0xFFF5FAF8), Color.White, Color(0xFF174D3E), Color(0xFF24755C), Color(0xFF24755C), Color(0xFF7D9390), Color(0x4024755C))
     }
 
     private fun Color.toArgbCompat() = AndroidColor.argb(
