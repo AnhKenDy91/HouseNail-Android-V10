@@ -20,6 +20,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -140,8 +141,42 @@ class MainActivity : ComponentActivity() {
         themeName = getSharedPreferences("housenail_v10", MODE_PRIVATE).getString("theme", "pearl") ?: "pearl"
         lockEnabled = getSharedPreferences("housenail_v10", MODE_PRIVATE).getBoolean("deviceLock", false)
         deviceUnlocked = !lockEnabled
-        BookingAlerts.createChannel(this)
-        handleBookingAlert(intent)
+        // Persist a sanitized crash signature so a startup crash can be diagnosed
+        // without adb. The next launch displays the exact exception class and stack.
+        val crashPrefs = getSharedPreferences("hn_startup_diagnostics", MODE_PRIVATE)
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            try {
+                val trace = android.util.Log.getStackTraceString(error)
+                crashPrefs.edit().putString("last_crash", trace.take(7000)).commit()
+            } catch (_: Throwable) { }
+            if (previousHandler != null) previousHandler.uncaughtException(thread, error)
+            else android.os.Process.killProcess(android.os.Process.myPid())
+        }
+        val previousCrash = crashPrefs.getString("last_crash", null)
+        if (!previousCrash.isNullOrBlank()) {
+            setContent {
+                MaterialTheme {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("HouseNail · Chẩn đoán khởi động", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        Text("Ứng dụng đã gặp lỗi ở lần mở trước. Chụp màn hình hoặc sao chép thông tin này để sửa chính xác.")
+                        SelectionContainer { Text(previousCrash, fontSize = 11.sp) }
+                        Button(onClick = {
+                            crashPrefs.edit().remove("last_crash").apply()
+                            recreate()
+                        }) { Text("Thử mở lại ứng dụng") }
+                    }
+                }
+            }
+            return
+        }
+        try {
+            BookingAlerts.createChannel(this)
+            handleBookingAlert(intent)
+        } catch (e: Exception) {
+            android.util.Log.e("HouseNailStartup", "Notification startup failed", e)
+        }
         setContent { HouseNailV10() }
         verifySession()
         lifecycleScope.launch {
