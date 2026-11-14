@@ -60,7 +60,7 @@ final class ApiClient {
         if (contentType == null || !contentType.toLowerCase().contains("application/json")) {
             conn.disconnect();
             if (code == 200) throw new AuthException();
-            throw new Exception("Không kết nối được máy chủ (HTTP " + code + ").");
+            throw new Exception("API " + action + ": máy chủ trả dữ liệu không phải JSON (HTTP " + code + ").");
         }
 
         storeRenewedCookie(conn);
@@ -71,7 +71,9 @@ final class ApiClient {
 
         JSONObject envelope = new JSONObject(text);
         if (!envelope.optBoolean("ok", false)) {
-            throw new Exception(envelope.optString("error", "Máy chủ từ chối yêu cầu."));
+            String reason = envelope.optString("error", "Máy chủ từ chối yêu cầu.");
+            String codeText = envelope.optString("code", "");
+            throw new Exception("API " + action + " (HTTP " + code + "): " + reason + (codeText.isEmpty() ? "" : " [" + codeText + "]"));
         }
         if (!envelope.has("result")) throw new Exception("Máy chủ không trả result.");
 
