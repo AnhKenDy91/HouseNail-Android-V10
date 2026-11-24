@@ -129,6 +129,15 @@ class MainActivity : ComponentActivity() {
     private var editorEmail by mutableStateOf("")
     private var editorNote by mutableStateOf("")
     private var editorConsent by mutableStateOf(false)
+    private var editorGuests by mutableStateOf(1)
+    private var editorGuestLimit by mutableStateOf(1)
+    private var editorNeedsVerification by mutableStateOf(false)
+
+    private fun guestLimit(config: JSONObject): Int {
+        val policy = config.optJSONObject("bookingCapacity") ?: return 1
+        return if (!policy.optBoolean("groupEnabled", true)) 1
+        else minOf(policy.optInt("capacity", 2), policy.optInt("maxGroupSize", 5)).coerceIn(1, 5)
+    }
     private var editorBusy by mutableStateOf(false)
     private var editorSlotsBusy by mutableStateOf(false)
     private var editorError by mutableStateOf("")
@@ -779,6 +788,9 @@ class MainActivity : ComponentActivity() {
         editorEmail = ""
         editorNote = ""
         editorConsent = false
+        editorGuests = 1
+        editorGuestLimit = 1
+        editorNeedsVerification = false
         editorError = ""
         editorBusy = false
         editorRequestId = UUID.randomUUID().toString()
@@ -790,7 +802,10 @@ class MainActivity : ComponentActivity() {
                     val rows = config.optJSONArray("services") ?: JSONArray()
                     val services = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
                     withContext(Dispatchers.Main) {
-                        if (editorOpen && editorMoving == null) editorServices = services
+                        if (editorOpen && editorMoving == null && editorServiceId.isBlank()) {
+                            editorServices = services
+                            editorGuestLimit = guestLimit(config)
+                        }
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) { editorError = e.message ?: "Không tải được dịch vụ." }
@@ -803,13 +818,39 @@ class MainActivity : ComponentActivity() {
         val gen = ++editorRequestGeneration
         val service = editorServiceId
         val day = editorDate.format(dayFmt)
+        val movingId = editorMoving?.optString("id")
+        val guests = editorGuests
         editorTime = ""
+        editorError = ""
         editorSlots = emptyList()
         if (service.isBlank()) { editorSlotsBusy = false; return }
         editorSlotsBusy = true
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val rows = api.callArray("adminAvailability", JSONArray().put(day).put(service))
+                val config = api.call("adminBookingConfig", JSONArray())
+                val serviceRows = config.optJSONArray("services") ?: JSONArray()
+                val freshServices = (0 until serviceRows.length()).mapNotNull { serviceRows.optJSONObject(it) }
+                val limit = guestLimit(config)
+                val current = withContext(Dispatchers.Main) {
+                    if (!editorOpen || editorRequestGeneration != gen) false
+                    else {
+                        editorServices = freshServices
+                        editorGuestLimit = limit
+                        if (movingId == null && guests > limit) {
+                            editorError = "Tiệm hiện nhận tối đa $limit khách mỗi lịch. Hãy chọn lại số khách."
+                            editorSlotsBusy = false
+                            false
+                        } else true
+                    }
+                }
+                if (!current) return@launch
+                if (freshServices.none { it.optString("id") == service && it.optInt("minutes") > 0 }) {
+                    error("Dịch vụ đã thay đổi. Hãy chọn lại dịch vụ.")
+                }
+                val args = JSONArray().put(day).put(service)
+                if (movingId != null) args.put(JSONObject().put("bookingId", movingId))
+                else if (guests > 1) args.put(JSONObject().put("guestCount", guests))
+                val rows = api.callArray("adminAvailability", args)
                 val slots = (0 until rows.length()).mapNotNull { rows.optString(it).takeIf(String::isNotBlank) }
                 withContext(Dispatchers.Main) {
                     if (editorOpen && editorRequestGeneration == gen) {
@@ -832,7 +873,13 @@ class MainActivity : ComponentActivity() {
         val moving = editorMoving
         val name = editorName.trim()
         val phone = editorPhone.trim()
-        if (editorBusy || editorSlotsBusy || editorTime.isBlank()) return
+        if (editorBusy || editorNeedsVerification || editorSlotsBusy || editorTime !in editorSlots) return
+        val minutes = editorServices.firstOrNull { it.optString("id") == editorServiceId }?.optInt("minutes") ?: 0
+        if (moving != null && moving.optInt("version", -1) < 0) {
+            editorError = "Hãy tải lại lịch trước khi đổi giờ."
+            return
+        }
+        if (moving == null && (minutes <= 0 || editorGuests > editorGuestLimit)) return
         if (moving == null && (name.length < 2 || normalizePhone(phone) == null || !editorConsent)) {
             editorError = "Nhập tên và số điện thoại hợp lệ, đồng thời xác nhận khách đồng ý lưu thông tin."
             return
@@ -846,13 +893,14 @@ class MainActivity : ComponentActivity() {
         val args: JSONArray
         if (moving != null) {
             action = "adminEdit"
-            args = JSONArray().put(moving.optString("id")).put("move").put(day).put(time)
+            args = JSONArray().put(moving.optString("id")).put("move").put(day).put(time).put(moving.optInt("version"))
         } else {
             action = "adminCreateBooking"
             val payload = JSONObject().apply {
                 put("serviceId", editorServiceId); put("date", day); put("time", time)
                 put("name", name); put("phone", phone); put("email", editorEmail.trim())
-                put("note", editorNote); put("guestCount", 1); put("privacyAccepted", editorConsent)
+                put("note", editorNote); put("guestCount", editorGuests); put("privacyAccepted", editorConsent)
+                put("expectedServiceMinutes", minutes)
                 put("website", ""); put("lang", "vi"); put("requestId", editorRequestId)
             }
             args = JSONArray().put(payload)
@@ -870,8 +918,11 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
+                    editorNeedsVerification = true
+                    selectedDay = date
+                    reloadDay()
                     editorError = (e.message ?: "Chưa xác nhận được thao tác.") +
-                        " Kiểm tra lại danh sách trước khi thử lần nữa."
+                        " Đóng bảng và kiểm tra danh sách trước khi thử lần nữa."
                 }
             } finally {
                 withContext(Dispatchers.Main) { editorBusy = false }
@@ -882,7 +933,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BookingEditor(p: Palette) {
         val moving = editorMoving
-        val canSave = !editorBusy && !editorSlotsBusy && editorTime.isNotBlank() &&
+        val canSave = !editorBusy && !editorNeedsVerification && !editorSlotsBusy && editorTime in editorSlots &&
             (moving != null || (editorName.trim().length >= 2 && normalizePhone(editorPhone) != null && editorConsent))
         Dialog(onDismissRequest = { if (!editorBusy) editorOpen = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -928,6 +979,18 @@ class MainActivity : ComponentActivity() {
                             Icon(Icons.Default.CalendarMonth, null)
                             Spacer(Modifier.width(8.dp))
                             Text(editorDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")))
+                        }
+                        if (moving == null && (editorGuestLimit > 1 || editorGuests > editorGuestLimit)) {
+                            Text("Số khách: $editorGuests", color = p.ink)
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                (1..editorGuestLimit).forEach { count ->
+                                    FilterChip(selected = editorGuests == count,
+                                        onClick = { editorGuests = count; loadEditorSlots() },
+                                        enabled = !editorBusy && !editorNeedsVerification,
+                                        label = { Text("$count khách") })
+                                }
+                            }
                         }
                         Text("Giờ trống từ website", color = p.secondary, fontSize = 12.sp)
                         if (editorSlotsBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
