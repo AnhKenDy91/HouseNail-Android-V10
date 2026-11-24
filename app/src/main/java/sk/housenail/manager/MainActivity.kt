@@ -1080,7 +1080,7 @@ class MainActivity : ComponentActivity() {
                             else -> bookings.size
                         }
                         val selected = bookingFilter == name
-                        Row(Modifier.clip(CircleShape).background(if(selected) Color(0xFF5C4047) else p.surface)
+                        Row(Modifier.clip(CircleShape).background(if(selected) Color(0xFF226E56) else p.surface)
                             .border(.8.dp, p.border, CircleShape).clickable { bookingFilter=name }
                             .padding(horizontal = 13.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(name, fontSize = 13.sp, color = if(selected) Color.White else p.ink)
@@ -1106,7 +1106,7 @@ class MainActivity : ComponentActivity() {
                             Text(name, fontSize = 12.sp,
                                 color = if(timelineMode==mode) Color.White else p.ink,
                                 modifier = Modifier.clip(RoundedCornerShape(9.dp))
-                                    .background(if(timelineMode==mode) Color(0xFF5C4047) else p.surface)
+                                    .background(if(timelineMode==mode) Color(0xFF226E56) else p.surface)
                                     .clickable { timelineMode=mode }
                                     .padding(horizontal = 10.dp, vertical = 9.dp))
                         }
@@ -1248,7 +1248,14 @@ class MainActivity : ComponentActivity() {
             text={Text("Hủy lịch của "+displayName(b)+" lúc "+b.optString("time")+"?")},
             confirmButton={TextButton(onClick={
                 confirmCancel=false
-                mutate("adminEdit", JSONArray().put(b.optString("id")).put("cancel").put(JSONObject.NULL).put(JSONObject.NULL),"Đã hủy lịch hẹn.")
+                val version = b.optInt("version", -1)
+                if (version < 0) {
+                    toast("Hãy tải lại lịch trước khi hủy.")
+                    reloadDay()
+                } else {
+                    mutate("adminEdit", JSONArray().put(b.optString("id")).put("cancel")
+                        .put(JSONObject.NULL).put(JSONObject.NULL).put(version), "Đã hủy lịch hẹn.")
+                }
             }){Text("Xác nhận hủy",color=MaterialTheme.colorScheme.error)}},
             dismissButton={TextButton(onClick={confirmCancel=false}){Text("Không")}})
         if(confirmOutcome) AlertDialog(onDismissRequest={confirmOutcome=false},
@@ -1380,7 +1387,7 @@ class MainActivity : ComponentActivity() {
                         val active=cardFilter==name
                         Text(name,fontSize=13.sp,
                             color=if(active) Color.White else p.ink,
-                            modifier=Modifier.clip(CircleShape).background(if(active) Color(0xFF5C4047) else p.surface)
+                            modifier=Modifier.clip(CircleShape).background(if(active) Color(0xFF226E56) else p.surface)
                                 .border(.8.dp,p.border,CircleShape).clickable{cardFilter=name}
                                 .padding(horizontal=13.dp,vertical=10.dp))
                     }
@@ -2686,6 +2693,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            item { BookingCapacitySettings(p) }
             item {
                 SettingsGroup(p, "Kiểm soát nhận lịch") {
                     TextButton(onClick={screen="booking-control"},modifier=Modifier.fillMaxWidth()) {
@@ -2945,7 +2953,7 @@ class MainActivity : ComponentActivity() {
         @Composable
     private fun ActionTile(p: Palette, title: String, icon: ImageVector, emphasized: Boolean, modifier: Modifier, onClick: () -> Unit) {
         Column(
-            modifier.heightIn(min = 116.dp).clip(RoundedCornerShape(21.dp)).background(if (emphasized) Color(0xFF5C4047) else p.surface)
+            modifier.heightIn(min = 116.dp).clip(RoundedCornerShape(21.dp)).background(if (emphasized) Color(0xFF226E56) else p.surface)
                 .border(1.dp, if (emphasized) p.champagne.copy(alpha = .6f) else p.border, RoundedCornerShape(21.dp)).clickable { onClick() }.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -3019,6 +3027,93 @@ class MainActivity : ComponentActivity() {
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             Text(key, color = p.ink, modifier = Modifier.weight(1f))
             Text(value, color = p.secondary, fontWeight = FontWeight.Medium)
+        }
+    }
+
+    @Composable
+    private fun BookingCapacitySettings(p: Palette) {
+        var revision by remember { mutableStateOf<String?>(null) }
+        var capacity by remember { mutableStateOf(2) }
+        var groupEnabled by remember { mutableStateOf(true) }
+        var groupMaximum by remember { mutableStateOf(5) }
+        var dirty by remember { mutableStateOf(false) }
+        var busy by remember { mutableStateOf(true) }
+        var reload by remember { mutableStateOf(0) }
+        var loaded by remember { mutableStateOf(false) }
+        var status by remember { mutableStateOf("") }
+        val scope = rememberCoroutineScope()
+
+        fun applyPolicy(policy: JSONObject) {
+            revision = policy.optString("revision").takeIf { it.isNotBlank() }
+            capacity = policy.optInt("capacity", 2).coerceIn(1, 5)
+            groupEnabled = policy.optBoolean("groupEnabled", true)
+            groupMaximum = policy.optInt("maxGroupSize", 5).coerceIn(1, 5)
+            loaded = revision != null
+            dirty = false
+        }
+
+        LaunchedEffect(reload) {
+            busy = true
+            try {
+                applyPolicy(withContext(Dispatchers.IO) { api.call("adminCapacityConfig", JSONArray()) })
+                status = ""
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                revision = null
+                status = "Chưa tải được sức chứa. Hãy thử tải lại."
+            } finally {
+                busy = false
+            }
+        }
+
+        if (!loaded) return
+        SettingsGroup(p, "Sức chứa & đặt lịch nhóm") {
+            val editable = !busy && revision != null
+            Text("Số người phục vụ cùng lúc", color = p.ink)
+            Row(Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                (1..5).forEach { count ->
+                    FilterChip(selected = capacity == count, enabled = editable,
+                        onClick = { capacity = count; dirty = true }, label = { Text(count.toString()) })
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Cho khách đặt lịch nhóm", Modifier.weight(1f), color = p.ink)
+                Switch(checked = groupEnabled, enabled = editable,
+                    onCheckedChange = { groupEnabled = it; dirty = true })
+            }
+            if (groupEnabled) {
+                Text("Số khách tối đa trong một lịch", color = p.ink)
+                Row(Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (1..5).forEach { count ->
+                        FilterChip(selected = groupMaximum == count, enabled = editable,
+                            onClick = { groupMaximum = count; dirty = true }, label = { Text(count.toString()) })
+                    }
+                }
+            }
+            Button(enabled = editable && dirty, onClick = {
+                val expected = revision ?: return@Button
+                val args = JSONArray().put(JSONObject().put("revision", expected)
+                    .put("capacity", capacity).put("groupEnabled", groupEnabled).put("maxGroupSize", groupMaximum))
+                busy = true
+                scope.launch {
+                    try {
+                        applyPolicy(withContext(Dispatchers.IO) { api.call("adminSetCapacityConfig", args) })
+                        status = "Đã lưu $capacity người cùng lúc."
+                    } catch (error: kotlinx.coroutines.CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        revision = null
+                        status = "Chưa xác nhận được thay đổi. Hãy tải lại trước khi lưu tiếp."
+                    } finally {
+                        busy = false
+                    }
+                }
+            }) { Text("Lưu thay đổi") }
+            OutlinedButton(enabled = !busy, onClick = { reload++ }) { Text("Tải lại cài đặt") }
+            if (status.isNotEmpty()) Text(status, color = p.secondary)
         }
     }
 
