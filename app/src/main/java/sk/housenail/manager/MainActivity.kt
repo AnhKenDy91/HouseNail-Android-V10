@@ -228,7 +228,7 @@ class MainActivity : ComponentActivity() {
                     staffAccount = role == "staff"
                     if (staffAccount) HouseNailTodayWidget.clear(this@MainActivity)
                     authenticated = true
-                    BookingAlerts.start(this@MainActivity)
+                    BookingAlerts.start(this@MainActivity, staffAccount)
                     BookingAlerts.requestPermissionIfNeeded(this@MainActivity)
                     lifecycleScope.launch(Dispatchers.IO) {
                         try { BookingAlerts.checkNow(this@MainActivity) } catch (_: Exception) {}

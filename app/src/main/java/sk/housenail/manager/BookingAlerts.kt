@@ -63,6 +63,7 @@ object BookingAlerts {
     private const val WORK_NAME = "housenail_booking_new_scan_v1"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_ACTIVE = "owner_session_active"
+    private const val KEY_STAFF = "staff_session"
     private const val KEY_PRIMED = "primed"
     private const val KEY_SEEN = "seen_ids"
     private const val KEY_FCM_TOKEN = "fcm_token"
@@ -115,9 +116,9 @@ object BookingAlerts {
         }
     }
 
-    fun start(context: Context) {
+    fun start(context: Context, staff: Boolean = prefs(context).getBoolean(KEY_STAFF, false)) {
         val ctx = context.applicationContext
-        prefs(ctx).edit().putBoolean(KEY_ACTIVE, true).apply()
+        prefs(ctx).edit().putBoolean(KEY_ACTIVE, true).putBoolean(KEY_STAFF, staff).apply()
         createChannel(ctx)
         if (!enabled(ctx)) return
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -127,7 +128,7 @@ object BookingAlerts {
         safeWorkManager(ctx)?.enqueueUniquePeriodicWork(
             WORK_NAME, ExistingPeriodicWorkPolicy.KEEP, request
         )
-        initializeFcmAndSync(ctx)
+        if (!staff) initializeFcmAndSync(ctx)
     }
 
     fun setEnabled(context: Context, value: Boolean) {
@@ -171,9 +172,10 @@ object BookingAlerts {
         val ctx = context.applicationContext
         if (!enabled(ctx) || !loggedIn(ctx)) return
         val today = LocalDate.now(ZoneId.of("Europe/Bratislava"))
-        val rows = ApiClient().callArray(
-            "adminList", JSONArray().put(today.minusDays(7).toString()).put(today.plusDays(180).toString())
-        )
+        val staff = prefs(ctx).getBoolean(KEY_STAFF, false)
+        val from = if (staff) today else today.minusDays(7)
+        val to = today.plusDays(if (staff) 30 else 180)
+        val rows = ApiClient().callArray("adminList", JSONArray().put(from.toString()).put(to.toString()))
         reconcile(ctx, rows)
     }
 
@@ -289,7 +291,7 @@ object BookingAlerts {
         if (token.isBlank()) return
         val p = prefs(ctx)
         p.edit().putString(KEY_FCM_TOKEN, token).apply()
-        if (!loggedIn(ctx) || !enabled(ctx) || !isFcmConfigured()) return
+        if (!loggedIn(ctx) || !enabled(ctx) || !isFcmConfigured() || p.getBoolean(KEY_STAFF, false)) return
         if (p.getString(KEY_SERVER_TOKEN, null) == token) return
         Thread {
             try {
