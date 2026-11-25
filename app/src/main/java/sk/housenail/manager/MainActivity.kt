@@ -550,6 +550,16 @@ class MainActivity : ComponentActivity() {
                                 selectedMember != null -> MemberDetail(p, selectedMember!!)
                                 screen == "booking-control" -> BookingControlScreen(p)
                                 screen == "website-access" -> WebsiteAccessScreen(p)
+                                !staffAccount && screen.startsWith("customer-history:") -> OwnerCustomerHistory(
+                                    screen.substringAfter(':'),
+                                    { action, args -> withContext(Dispatchers.IO) { api.call(action, args) } },
+                                    ::openLogin, { selectedMember = it }
+                                )
+                                !staffAccount && screen.startsWith("owner-tools:") -> OwnerTools(
+                                    { action, args -> withContext(Dispatchers.IO) { api.call(action, args) } },
+                                    screen.substringAfter(':'), { screen = "owner-tools:" + it },
+                                    ::openLogin, ::reloadDay
+                                )
                                 screen == "services" -> ServiceVisibilityScreen(p)
                                 screen == "waitlist" -> WaitlistScreen(p)
                                 screen == "history" -> BookingHistory(p)
@@ -1301,6 +1311,7 @@ class MainActivity : ComponentActivity() {
         var confirmOutcome by remember(b.optString("id")) { mutableStateOf(false) }
         var confirmComplete by remember(b.optString("id")) { mutableStateOf(false) }
         var confirmBookingReward by remember(b.optString("id")) { mutableStateOf(false) }
+        var confirmUndoAttendance by remember(b.optString("id")) { mutableStateOf(false) }
         var updating by remember(b.optString("id")) { mutableStateOf(false) }
         val bookingScope = rememberCoroutineScope()
         val stage = b.optString("serviceStage", "pending")
@@ -1390,10 +1401,17 @@ class MainActivity : ComponentActivity() {
                         if(normalized!=null) TextButton(onClick={selectedMember=normalized;tab=3}) {
                             Text("Mở thẻ khách")
                         }
+                        if(normalized!=null && !staffAccount) TextButton(onClick={
+                            selectedBooking = null
+                            screen = "customer-history:" + normalized
+                        }) { Text("Hồ sơ và lịch sử khách") }
                     }
                     b.optString("email").takeIf(String::isNotBlank)?.let { LabelLine(p, "Email", it) }
                     b.optString("note").takeIf(String::isNotBlank)?.let { Text(it,color=p.secondary) }
                 }
+            }
+            if (b.completed() && !staffAccount) item {
+                OutlinedButton(onClick = { confirmUndoAttendance = true }) { Text("Hoàn tác xác nhận đã đến") }
             }
             if(editable) item {
                 VIPPanel(p) {
@@ -1424,6 +1442,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (confirmUndoAttendance) AlertDialog(
+            onDismissRequest = { confirmUndoAttendance = false },
+            title = { Text("Hoàn tác xác nhận đã đến?") },
+            text = { Text("Máy chủ sẽ kiểm tra lịch và lượt tích điểm liên quan trước khi hoàn tác.") },
+            confirmButton = { TextButton(onClick = {
+                confirmUndoAttendance = false
+                mutate("adminUndoAttendance", JSONArray().put(b.optString("id")), "Đã hoàn tác xác nhận đã đến.")
+            }) { Text("Hoàn tác") } },
+            dismissButton = { TextButton(onClick = { confirmUndoAttendance = false }) { Text("Quay lại") } }
+        )
         if (confirmComplete) AlertDialog(
             onDismissRequest = { confirmComplete = false },
             title = { Text("Xác nhận hoàn thành lịch?") },
@@ -3053,6 +3081,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
+                SettingsGroup(p, "Quản trị website") {
+                    TextButton(onClick = { screen = "owner-tools:" }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Giờ làm, thời lượng, thông báo và dữ liệu")
+                    }
+                }
                 SettingsGroup(p, "Dịch vụ đặt lịch trực tuyến") {
                     TextButton(onClick={screen="services"},modifier=Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.Tune,null,tint=p.accent)

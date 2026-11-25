@@ -21,8 +21,8 @@ android {
         applicationId = "sk.housenail.manager"
         minSdk = 28
         targetSdk = 35
-        versionCode = 31
-        versionName = "21.10.72.1"
+        versionCode = 32
+        versionName = "21.10.72.2"
         buildConfigField("String", "HN_FCM_APP_ID", "\""+(System.getenv("HN_FCM_APP_ID").orEmpty().ifBlank { "1:867056772500:android:445137a57add3319159b81" })+"\"")
         buildConfigField("String", "HN_FCM_API_KEY", "\""+(System.getenv("HN_FCM_API_KEY").orEmpty().ifBlank { "AIzaSyAZQZNzUkKHbc4NHduYFDe0QJc4Pl1eHc8" })+"\"")
         buildConfigField("String", "HN_FCM_SENDER_ID", "\""+(System.getenv("HN_FCM_SENDER_ID").orEmpty().ifBlank { "867056772500" })+"\"")
