@@ -69,11 +69,11 @@ class HouseNailTodayWidget : AppWidgetProvider() {
             val next = prefs.getString("next", "").orEmpty()
             val updated = prefs.getLong("updated", 0)
             val views = RemoteViews(context.packageName, R.layout.housenail_today_widget)
-            views.setTextViewText(R.id.hn_widget_count, if (valid) "${prefs.getInt("total", 0)} lịch hôm nay" else "Lịch hôm nay")
+            views.setTextViewText(R.id.hn_widget_count, if (valid) "${prefs.getInt("total", 0)}" else "—")
             views.setTextViewText(R.id.hn_widget_next, when {
                 !valid -> "Mở app để đồng bộ"
                 next.isEmpty() -> "Hết lịch chờ"
-                else -> "Lịch tiếp theo · $next"
+                else -> "◷ Tiếp theo · $next"
             })
             val detail = if (valid && updated > 0) {
                 val formatter = DateFormat.getTimeFormat(context).apply {

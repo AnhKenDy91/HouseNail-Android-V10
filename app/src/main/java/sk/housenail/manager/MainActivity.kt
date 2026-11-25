@@ -655,9 +655,6 @@ class MainActivity : ComponentActivity() {
                     Text(title, fontSize = 26.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold,
                         color = p.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                if (tab == 1 && !detail) IconButton(onClick = { openBookingEditor() }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.AddCircle, "Thêm lịch", tint = p.accent, modifier = Modifier.size(22.dp))
-                }
                 Row(Modifier.clip(CircleShape).background(p.accent.copy(alpha = .10f))
                     .clickable { if (tab == 3) loadMembers() else reloadDay() }
                     .padding(horizontal = 11.dp, vertical = 8.dp),
@@ -1202,7 +1199,34 @@ class MainActivity : ComponentActivity() {
                     HorizontalDivider(color = p.border)
                     Spacer(Modifier.height(10.dp))
                     SyncBanner(p)
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (!staffAccount) OutlinedButton(onClick = { screen = "waitlist" }, modifier = Modifier.weight(1f)) {
+                            Text("Danh sách chờ", fontSize = 12.sp, maxLines = 1)
+                        }
+                        Button(onClick = { openBookingEditor() }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.AddCircle, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Thêm lịch")
+                        }
+                    }
                 }
+            }
+            if (staffAccount) item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Đang chờ" to "pending", "Đang làm" to "serving", "Hoàn thành" to "completed").forEach { (label, stage) ->
+                        val count = bookings.count { !it.cancelled() && !it.noShow() && if (stage == "completed") it.completed() else !it.completed() && it.optString("serviceStage", "pending") == stage }
+                        StaffStatusTile(p, label, count, if (stage == "completed") Icons.Default.CheckCircle else Icons.Default.Schedule, Modifier.weight(1f)) { bookingFilter = label }
+                    }
+                }
+            }
+            item {
+                OutlinedTextField(value = bookingSearch, onValueChange = { bookingSearch = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("Tên khách, số điện thoại hoặc dịch vụ") },
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = p.accent) },
+                    trailingIcon = { if (bookingSearch.isNotEmpty()) IconButton(onClick = { bookingSearch = "" }) { Icon(Icons.Default.Cancel, "Xóa tìm kiếm") } },
+                    shape = RoundedCornerShape(15.dp))
             }
             item {
                 SectionTitle(p, "Trạng thái lịch", "Chọn để xem đúng những lịch cần xử lý")
@@ -1210,7 +1234,9 @@ class MainActivity : ComponentActivity() {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     names.forEach { name ->
                         val count = when(name) {
-                            "Đang chờ" -> bookings.count { !it.cancelled() && !it.completed() && !it.noShow() }
+                            "Đang chờ" -> bookings.count { !it.cancelled() && !it.completed() && !it.noShow() && (!staffAccount || it.optString("serviceStage", "pending") == "pending") }
+                            "Đã đến" -> bookings.count { !it.cancelled() && !it.completed() && !it.noShow() && it.optString("serviceStage") == "arrived" }
+                            "Đang làm" -> bookings.count { !it.cancelled() && !it.completed() && !it.noShow() && it.optString("serviceStage") == "serving" }
                             "Hoàn thành" -> bookings.count { !it.cancelled() && it.completed() && !it.noShow() }
                             "Không đến" -> bookings.count { !it.cancelled() && it.noShow() }
                             "Đã hủy" -> bookings.count { it.cancelled() }
@@ -1226,12 +1252,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-            }
-            item {
-                OutlinedTextField(value = bookingSearch, onValueChange = { bookingSearch = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    placeholder = { Text("Tên khách, số điện thoại hoặc dịch vụ") },
-                    leadingIcon = { Icon(Icons.Default.Search, null) })
             }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1250,7 +1270,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (filtered.isEmpty()) item {
+            if (loading && bookings.isEmpty()) item {
+                Row(Modifier.padding(20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Text("Đang cập nhật lịch từ website…", color = p.secondary)
+                }
+            }
+            if (filtered.isEmpty() && !loading) item {
                 VIPPanel(p) { EmptyBlock(p, "Chưa có lịch phù hợp", "Đổi bộ lọc, chọn ngày khác hoặc tạo lịch mới.") }
             }
             items(filtered, key = { it.optString("id") }) { b -> BookingCard(p, b) }
@@ -1523,14 +1549,16 @@ class MainActivity : ComponentActivity() {
             }
             item {
                 Box(
-                    Modifier.fillMaxWidth().height(310.dp).clip(RoundedCornerShape(29.dp))
-                        .background(Brush.linearGradient(listOf(Color(0xFF2E2629), Color(0xFF5C4047))))
+                    Modifier.fillMaxWidth().heightIn(min = 350.dp).clip(RoundedCornerShape(29.dp))
+                        .background(Brush.linearGradient(if (themeName == "mint") listOf(Color(.09f,.25f,.19f), Color(0xFF226E56)) else listOf(Color(.18f,.15f,.16f), Color(.36f,.25f,.28f))))
                         .border(1.dp, p.champagne.copy(alpha = .53f), RoundedCornerShape(29.dp)).clickable { startQr() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column(Modifier.padding(vertical = 37.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Box(Modifier.size(180.dp).border(1.dp, p.champagne.copy(alpha = .72f), RoundedCornerShape(29.dp)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.QrCodeScanner, null, tint = p.champagne, modifier = Modifier.size(96.dp))
+                            Box(Modifier.size(148.dp).border(1.dp, Color.White.copy(alpha = .22f), RoundedCornerShape(22.dp)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.QrCodeScanner, null, tint = p.champagne, modifier = Modifier.size(97.dp))
+                            }
                         }
                         Text("QR EXPRESS", fontSize = 11.sp, letterSpacing = 4.sp, color = p.champagne)
                         Text("CHẠM ĐỂ MỞ CAMERA", fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp, color = Color.White)
@@ -1549,23 +1577,74 @@ class MainActivity : ComponentActivity() {
                     StepLine(p, "03", "Xác nhận thao tác", "Chỉ ghi lượt khi bạn chủ động xác nhận")
                 }
             }
+            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Lock, null, tint = p.accent, modifier = Modifier.size(18.dp))
+                Text("Camera chỉ đọc QR. Không tự cộng điểm, hủy thẻ hay thay đổi lịch hẹn.", fontSize = 12.sp, color = p.secondary)
+            } }
         }
     }
 
     @Composable
     private fun StaffHome(p: Palette) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            SectionTitle(p, "Lịch làm việc", selectedDay.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")))
-            DaySelector(p)
-            VIPPanel(p) {
-                LabelLine(p, "Đang chờ", bookings.count { !it.cancelled() && !it.completed() && !it.noShow() && it.optString("serviceStage", "pending") == "pending" }.toString())
-                LabelLine(p, "Đang làm", bookings.count { !it.cancelled() && !it.completed() && !it.noShow() && it.optString("serviceStage") == "serving" }.toString())
-                LabelLine(p, "Hoàn thành", bookings.count { it.completed() }.toString())
-                Button(onClick = { tab = 1; bookingFilter = "Tất cả" }) { Text("Xem lịch hẹn") }
-                OutlinedButton(onClick = { openBookingEditor() }) { Text("Thêm lịch hẹn") }
+        val open = bookings.filter { !it.cancelled() && !it.completed() && !it.noShow() }
+            .sortedWith(compareBy<JSONObject> { it.optString("time") }.thenBy { it.optString("id") })
+        LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(15.dp)) {
+            item { VIPPanel(p) {
+                Text("BÀN LÀM VIỆC · NHÂN VIÊN", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, color = p.accent)
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Tổng quan công việc", fontSize = 22.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, color = p.ink)
+                        Text(selectedDay.toString(), fontSize = 14.sp, color = p.secondary)
+                    }
+                    OutlinedButton(onClick = { selectedDay = LocalDate.now(zone); reloadDay() }) { Text("Hôm nay") }
+                }
+                Spacer(Modifier.height(12.dp)); SyncBanner(p)
+            } }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StaffStatusTile(p, "Chờ phục vụ", open.count { it.optString("serviceStage", "pending") == "pending" }, Icons.Default.Schedule, Modifier.weight(1f)) { bookingFilter = "Đang chờ"; tab = 1 }
+                    StaffStatusTile(p, "Đã đến", open.count { it.optString("serviceStage") == "arrived" }, Icons.Default.Person, Modifier.weight(1f)) { bookingFilter = "Đã đến"; tab = 1 }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StaffStatusTile(p, "Đang làm", open.count { it.optString("serviceStage") == "serving" }, Icons.Default.AutoAwesome, Modifier.weight(1f)) { bookingFilter = "Đang làm"; tab = 1 }
+                    StaffStatusTile(p, "Hoàn thành", bookings.count { !it.cancelled() && it.completed() && !it.noShow() }, Icons.Default.CheckCircle, Modifier.weight(1f)) { bookingFilter = "Hoàn thành"; tab = 1 }
+                }
             }
-            TextButton(onClick = ::logout) { Text("Đăng xuất") }
+            item { VIPPanel(p) {
+                Text("Thao tác nhanh", fontWeight = FontWeight.SemiBold, color = p.ink)
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = { openBookingEditor() }, modifier = Modifier.weight(1f)) { Text("Thêm lịch") }
+                    OutlinedButton(onClick = { tab = 1; bookingFilter = "Tất cả" }, modifier = Modifier.weight(1f)) { Text("Lịch hẹn") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = { tab = 2 }, modifier = Modifier.weight(1f)) { Text("Tìm khách") }
+                    OutlinedButton(onClick = { tab = 4; startQr() }, modifier = Modifier.weight(1f)) { Text("Quét QR") }
+                }
+            } }
+            item { Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Lịch cần xử lý", fontSize = 20.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, color = p.ink, modifier = Modifier.weight(1f))
+                TextButton(onClick = { bookingFilter = "Tất cả"; tab = 1 }) { Text("Xem tất cả") }
+            } }
+            if (loading && bookings.isEmpty()) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            else if (open.isEmpty()) item { VIPPanel(p) { Text("Không còn lịch chờ xử lý trong ngày này", color = p.accent) } }
+            items(open.take(5), key = { it.optString("id") }) { b -> VIPPanel(p) { UpcomingRow(p, b) } }
+            item { Text("Lịch, trạng thái và điểm được đọc trực tiếp từ dữ liệu chung của tiệm.", fontSize = 12.sp, color = p.secondary) }
+            item { TextButton(onClick = ::logout) { Text("Đăng xuất") } }
+        }
+    }
+
+    @Composable
+    private fun StaffStatusTile(p: Palette, label: String, count: Int, symbol: ImageVector, modifier: Modifier, onClick: () -> Unit) {
+        Column(modifier.heightIn(min = 102.dp).clip(RoundedCornerShape(15.dp)).background(p.surface)
+            .clickable(onClick = onClick).padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)) {
+            Icon(symbol, null, tint = p.accent, modifier = Modifier.size(23.dp))
+            Text(count.toString(), fontSize = 25.sp, fontWeight = FontWeight.Bold, color = p.accent)
+            Text(label, fontSize = 10.sp, maxLines = 1, fontWeight = FontWeight.SemiBold, color = p.accent)
         }
     }
 
@@ -2991,8 +3070,8 @@ class MainActivity : ComponentActivity() {
         LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(17.dp)) {
             item {
-                Text("Thiết lập quản lý  ·  HOUSE NAIL V21.7", fontSize = 16.sp,
-                    color = Color(0xFF226C55), fontWeight = FontWeight.Bold)
+                Text("HN · ${BuildConfig.VERSION_NAME} · #${BuildConfig.VERSION_CODE}", fontSize = 16.sp,
+                    color = p.accent, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val credit = wallet?.optDouble("credit", Double.NaN)
@@ -3004,11 +3083,11 @@ class MainActivity : ComponentActivity() {
                         "SMS có thể gửi" to (if (remaining >= 0) remaining.toString() else "—")
                     ).forEach { (label, value) ->
                         Card(modifier = Modifier.weight(1f).height(125.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE7F0EC))) {
+                            colors = CardDefaults.cardColors(containerColor = p.accent.copy(alpha = .10f))) {
                             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                                Text(label, color = Color(0xFF255A4D), fontSize = 12.sp)
+                                Text(label, color = p.secondary, fontSize = 12.sp)
                                 Spacer(Modifier.height(20.dp))
-                                Text(value, color = Color(0xFF174D3E), fontSize = 18.sp,
+                                Text(value, color = p.ink, fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold)
                             }
                         }
@@ -3089,7 +3168,7 @@ class MainActivity : ComponentActivity() {
                         Icon(Icons.Default.Lock,null,tint=p.accent,modifier=Modifier.size(15.dp))
                         Text("  HouseNail Account",fontSize=11.sp,color=p.accent,modifier=Modifier.weight(1f))
                         Icon(Icons.Default.AutoAwesome,null,tint=p.champagne,modifier=Modifier.size(14.dp))
-                        Text(" V10 VIP",fontSize=11.sp,color=p.accent)
+                        Text(" ${BuildConfig.VERSION_NAME}",fontSize=11.sp,color=p.accent)
                     }
                 }
             }
@@ -3121,10 +3200,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                SettingsGroup(p, "Quản trị website") {
-                    TextButton(onClick = { screen = "owner-tools:" }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Giờ làm, thời lượng, thông báo và dữ liệu")
-                    }
+                SettingsGroup(p, "Quản lý website & khóa lịch") {
+                    SettingsLink(p, "Giờ mở cửa & ngày nghỉ", Icons.Default.Schedule) { screen = "owner-tools:hours" }
+                    SettingsLink(p, "Thông báo website", Icons.Default.Notifications) { screen = "owner-tools:notice" }
+                    SettingsLink(p, "Thời lượng từng dịch vụ", Icons.Default.Timer) { screen = "owner-tools:duration" }
+                    SettingsLink(p, "Xóa lịch", Icons.Default.DeleteOutline) { screen = "owner-tools:cleanup" }
+                    SettingsLink(p, "Công cụ quản trị khác", Icons.Default.Settings) { screen = "owner-tools:" }
                 }
                 SettingsGroup(p, "Dịch vụ đặt lịch trực tuyến") {
                     TextButton(onClick={screen="services"},modifier=Modifier.fillMaxWidth()) {
@@ -3175,7 +3256,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                SettingsGroup(p, "Luxury Theme Studio") {
+                SettingsGroup(p, "Giao diện") {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = themeName == "mint", onClick = { setTheme("mint") }, label = { Text("Mint Atelier") })
                         FilterChip(selected = themeName == "pearl", onClick = { setTheme("pearl") },
@@ -3184,6 +3265,7 @@ class MainActivity : ComponentActivity() {
                             label = { Text("Royal Obsidian") })
                     }
                     ThemePreview(p)
+                    SettingsLink(p, "Chủ đề website", Icons.Default.Language) { screen = "owner-tools:theme" }
                     Text("Thay đổi nền, bề mặt, chữ và màu nhấn ngay lập tức.",
                         fontSize=12.sp,color=p.secondary)
                 }
@@ -3266,7 +3348,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                SettingsGroup(p,"Báo cáo & quản trị"){
+                SettingsGroup(p,"Nhân viên & báo cáo"){
+                    SettingsLink(p, "Đối chiếu tích điểm", Icons.Default.CreditCard) { screen = "owner-tools:loyalty" }
                     TextButton(onClick={reportSelected=null;screen="reports"},modifier=Modifier.fillMaxWidth()){
                         Icon(Icons.Default.BarChart,null)
                         Text("  Báo cáo tuần · tháng · năm",modifier=Modifier.weight(1f),color=p.ink)
@@ -3288,7 +3371,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             item {
-                SettingsGroup(p, "HouseNail Manager · V10 Pearl Luxury VIP"){
+                SettingsGroup(p, "Bảo mật & tài khoản"){
                     LabelLine(p,"Máy chủ","housenail.sk")
                     LabelLine(p,"Múi giờ","Europe/Bratislava")
                     Text("Lịch hẹn, khách hàng và thẻ dùng chung dữ liệu với website. Các thay đổi chỉ được lưu khi máy chủ xác nhận.",
@@ -3532,15 +3615,42 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ThemePreview(p: Palette) {
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(p.paper).border(1.dp, p.champagne.copy(alpha = .5f), RoundedCornerShape(18.dp)).padding(16.dp)) {
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(p.paper)
+            .border(1.dp, p.champagne.copy(alpha = .5f), RoundedCornerShape(18.dp)).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row {
                 Column {
                     Text("HOUSE NAIL", fontSize = 10.sp, letterSpacing = 3.sp, color = p.ink)
                     Text("Luxury Manager", fontFamily = FontFamily.Serif, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = p.ink)
                 }
-                Spacer(Modifier.weight(1f))
-                Icon(Icons.Default.WorkspacePremium, null, tint = p.champagne)
+                Spacer(Modifier.weight(1f)); Icon(Icons.Default.WorkspacePremium, null, tint = p.champagne)
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                listOf("Lịch hẹn" to "12", "Hoàn thành" to "08").forEach { (label, count) ->
+                    Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(p.surface).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Icon(if (label == "Lịch hẹn") Icons.Default.CalendarMonth else Icons.Default.CheckCircle, null, tint = p.champagne)
+                        Text(count, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = p.ink)
+                        Text(label, fontSize = 11.sp, color = p.ink)
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(p.surface).padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Tổng quan", fontSize = 12.sp, color = p.ink)
+                Icon(Icons.Default.QrCodeScanner, null, tint = p.ink, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Groups, null, tint = p.ink, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+
+    @Composable
+    private fun SettingsLink(p: Palette, title: String, symbol: ImageVector, onClick: () -> Unit) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(symbol, null, tint = p.accent, modifier = Modifier.size(20.dp))
+            Text(title, color = p.ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Icon(Icons.Default.ChevronRight, null, tint = p.secondary, modifier = Modifier.size(16.dp))
         }
     }
 
@@ -3720,7 +3830,7 @@ class MainActivity : ComponentActivity() {
                 metallic = Color(.75f, .60f, .42f)
             }
         }
-        return Palette(paper, surface, ink, accent, metallic, ink.copy(alpha = .75f), ink.copy(alpha = .12f))
+        return Palette(paper, surface, ink, accent, metallic, ink.copy(alpha = .75f), metallic.copy(alpha = .25f))
     }
 
     private fun Color.toArgbCompat() = AndroidColor.argb(
