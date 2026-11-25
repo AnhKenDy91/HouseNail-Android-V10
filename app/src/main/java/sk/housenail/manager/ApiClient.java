@@ -23,11 +23,16 @@ final class ApiClient {
         AuthException() { super("LOGIN_REQUIRED"); }
     }
 
-    void verifyOwnerSession() throws Exception {
+    String verifyOwnerSession() throws Exception {
         JSONObject response = authAction("session");
         if (!response.optBoolean("ok", false) || response.optString("email", "").isEmpty()) {
             throw new AuthException();
         }
+        String role = response.optString("role", "owner");
+        if (!("owner".equals(role) || "staff".equals(role))) {
+            throw new Exception("Vai trò HouseNail không hợp lệ.");
+        }
+        return role;
     }
 
     boolean logoutOwnerSession() {

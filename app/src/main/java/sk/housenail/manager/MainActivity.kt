@@ -87,6 +87,11 @@ class MainActivity : ComponentActivity() {
     private val dayFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.US)
 
     private var authenticated by mutableStateOf(false)
+    private var staffAccount by mutableStateOf(false)
+    private var bookingLoadGeneration = 0
+    private val tabBookingDetails = mutableMapOf<Int, JSONObject>()
+    private val tabMemberDetails = mutableMapOf<Int, String>()
+    private val tabScreens = mutableMapOf<Int, String>()
     private var lockEnabled by mutableStateOf(false)
     private var deviceUnlocked by mutableStateOf(true)
     private var authenticating = false
@@ -205,6 +210,9 @@ class MainActivity : ComponentActivity() {
                             catch (_: Exception) { /* Retry on the next scan. */ }
                         }
                     }
+                    if (authenticated && !staffAccount && HouseNailTodayWidget.installed(this@MainActivity)) {
+                        refreshWidgetToday()
+                    }
                     delay(45_000L)
                 }
             }
@@ -215,8 +223,10 @@ class MainActivity : ComponentActivity() {
         loading = true
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                api.verifyOwnerSession()
+                val role = api.verifyOwnerSession()
                 withContext(Dispatchers.Main) {
+                    staffAccount = role == "staff"
+                    if (staffAccount) HouseNailTodayWidget.clear(this@MainActivity)
                     authenticated = true
                     BookingAlerts.start(this@MainActivity)
                     BookingAlerts.requestPermissionIfNeeded(this@MainActivity)
@@ -238,13 +248,20 @@ class MainActivity : ComponentActivity() {
     private fun reloadDay() {
         loading = true
         val day = selectedDay.format(dayFmt)
+        val generation = ++bookingLoadGeneration
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val arr = api.callArray("adminList", JSONArray().put(day).put(day))
                 val list = mutableListOf<JSONObject>()
                 for (i in 0 until arr.length()) arr.optJSONObject(i)?.let(list::add)
                 withContext(Dispatchers.Main) {
+                    if (generation != bookingLoadGeneration || !authenticated) return@withContext
                     bookings = list
+                    if (!staffAccount) HouseNailTodayWidget.save(this@MainActivity, day, list)
+                    val openID = selectedBooking?.optString("id")
+                    if (!openID.isNullOrEmpty()) {
+                        list.firstOrNull { it.optString("id") == openID }?.let { selectedBooking = it }
+                    }
                     lastSync = java.time.LocalTime.now(zone).format(DateTimeFormatter.ofPattern("HH:mm"))
                     val id = pendingAlertBookingId
                     if (!id.isNullOrBlank()) {
@@ -257,8 +274,28 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { toast(e.message ?: "Không tải được lịch.") }
             } finally {
-                withContext(Dispatchers.Main) { loading = false }
+                withContext(Dispatchers.Main) { if (generation == bookingLoadGeneration) loading = false }
             }
+        }
+    }
+
+    private suspend fun refreshWidgetToday() {
+        val today = LocalDate.now(zone)
+        if (selectedDay == today) {
+            reloadDay()
+            return
+        }
+        val generation = bookingLoadGeneration
+        val day = today.format(dayFmt)
+        try {
+            val rows = withContext(Dispatchers.IO) { api.callArray("adminList", JSONArray().put(day).put(day)) }
+            if (authenticated && !staffAccount && generation == bookingLoadGeneration && selectedDay != today) {
+                HouseNailTodayWidget.save(this, day, (0 until rows.length()).mapNotNull { rows.optJSONObject(it) })
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep the last widget snapshot until another successful read.
         }
     }
 
@@ -354,11 +391,42 @@ class MainActivity : ComponentActivity() {
 
     private fun openLogin() {
         authenticated = false
+        bookingLoadGeneration++
+        memberRequest++
+        memberLoading = false
+        bookings = emptyList()
+        members = emptyList()
+        memberPage = 1
+        memberTotal = 0
+        memberHasMore = false
+        memberQuery = ""
+        selectedBooking = null
+        selectedMember = null
+        tabBookingDetails.clear()
+        tabMemberDetails.clear()
+        tabScreens.clear()
+        bookingSearch = ""
+        bookingFilter = "Tất cả"
+        screen = "main"
+        tab = if (pendingAlertBookingId != null || intent.action == HouseNailTodayWidget.OPEN_TODAY) 1 else 0
+        HouseNailTodayWidget.clear(this)
         BookingAlerts.markLoggedOut(this)
         startActivityForResult(Intent(this, LoginActivity::class.java), 4101)
     }
 
     private fun handleBookingAlert(next: Intent?) {
+        if (next?.action == HouseNailTodayWidget.OPEN_TODAY) {
+            pendingAlertBookingId = null
+            selectedDay = LocalDate.now(zone)
+            bookingFilter = "Tất cả"
+            bookingSearch = ""
+            tab = 1
+            screen = "main"
+            selectedBooking = null
+            selectedMember = null
+            tabBookingDetails.remove(1)
+            return
+        }
         if (next?.getBooleanExtra("hn_from_booking_alert", false) != true) return
         val date = next.getStringExtra("hn_booking_date")
         val bookingId = next.getStringExtra("hn_booking_id")
@@ -370,6 +438,7 @@ class MainActivity : ComponentActivity() {
         tab = 1
         screen = "main"
         selectedBooking = null
+        selectedMember = null
         next.removeExtra("hn_from_booking_alert")
     }
 
@@ -488,11 +557,17 @@ class MainActivity : ComponentActivity() {
                                 screen == "insights" -> Insights(p)
                                 screen == "diagnostics" -> Diagnostics(p)
                                 screen == "sync" -> SyncCenter(p)
-                                tab == 0 -> tabState.SaveableStateProvider(0) { Dashboard(p) }
+                                tab == 0 -> tabState.SaveableStateProvider(0) {
+                                    if (staffAccount) StaffHome(p) else Dashboard(p)
+                                }
                                 tab == 1 -> tabState.SaveableStateProvider(1) { Appointments(p) }
-                                tab == 2 -> tabState.SaveableStateProvider(2) { QuickScan(p) }
+                                tab == 2 -> tabState.SaveableStateProvider(2) {
+                                    if (staffAccount) StaffDirectory(p) else QuickScan(p)
+                                }
                                 tab == 3 -> tabState.SaveableStateProvider(3) { Customers(p) }
-                                else -> tabState.SaveableStateProvider(4) { MoreScreen(p) }
+                                else -> tabState.SaveableStateProvider(4) {
+                                    if (staffAccount) QuickScan(p) else MoreScreen(p)
+                                }
                             }
                             if (loading) {
                                 LinearProgressIndicator(
@@ -531,14 +606,14 @@ class MainActivity : ComponentActivity() {
             screen == "sync" -> "Trung tâm đồng bộ"
             tab == 0 -> "Tổng quan"
             tab == 1 -> "Lịch hẹn"
-            tab == 2 -> "Quét QR"
-            tab == 3 -> "Khách hàng"
-            else -> "Cài đặt"
+            tab == 2 -> if (staffAccount) "Khách hàng" else "Quét QR"
+            tab == 3 -> if (staffAccount) "Thẻ khách" else "Khách hàng"
+            else -> if (staffAccount) "Quét QR" else "Cài đặt"
         }
         CenterAlignedTopAppBar(
             title = {
                 Column {
-                    Text("HOUSE NAIL · MANAGER", fontSize = 10.sp, letterSpacing = 2.sp, color = p.accent)
+                    Text(if (staffAccount) "HOUSE NAIL · NHÂN VIÊN" else "HOUSE NAIL · MANAGER", fontSize = 10.sp, letterSpacing = 2.sp, color = p.accent)
                     Text(title, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, color = p.ink)
                 }
             },
@@ -569,8 +644,10 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun V10TabBar(p: Palette) {
-        val labels = listOf("Trang chủ", "Lịch", "Quét QR", "Khách", "Cài đặt")
-        val icons = listOf(Icons.Default.GridView, Icons.Default.CalendarMonth, Icons.Default.QrCodeScanner, Icons.Default.Groups, Icons.Default.Tune)
+        val labels = if (staffAccount) listOf("Tổng quan", "Lịch hẹn", "Khách hàng", "Thẻ khách", "Quét QR")
+            else listOf("Trang chủ", "Lịch", "Quét QR", "Khách", "Cài đặt")
+        val icons = if (staffAccount) listOf(Icons.Default.GridView, Icons.Default.CalendarMonth, Icons.Default.Groups, Icons.Default.CreditCard, Icons.Default.QrCodeScanner)
+            else listOf(Icons.Default.GridView, Icons.Default.CalendarMonth, Icons.Default.QrCodeScanner, Icons.Default.Groups, Icons.Default.Tune)
         Surface(color = p.surface, shadowElevation = 6.dp) {
             Row(
                 Modifier.fillMaxWidth().navigationBarsPadding().height(83.dp)
@@ -585,11 +662,16 @@ class MainActivity : ComponentActivity() {
                             .clip(RoundedCornerShape(17.dp))
                             .background(if (active) Color(0xFFDFECE7) else p.surface)
                             .border(1.dp, if (active) Color(0xFFAAC9BD) else p.border, RoundedCornerShape(17.dp)).clickable {
-                            tab = i
-                            screen = "main"
-                            selectedBooking = null
-                            selectedMember = null
-                            if (i == 3 && members.isEmpty()) loadMembers()
+                            if (tab != i) {
+                                selectedBooking.let { if (it == null) tabBookingDetails.remove(tab) else tabBookingDetails[tab] = it }
+                                selectedMember.let { if (it == null) tabMemberDetails.remove(tab) else tabMemberDetails[tab] = it }
+                                tabScreens[tab] = screen
+                                tab = i
+                                screen = tabScreens[i] ?: "main"
+                                selectedBooking = tabBookingDetails[i]
+                                selectedMember = tabMemberDetails[i]
+                                if (i == 3 && members.isEmpty()) loadMembers()
+                            }
                         }.padding(top = 10.dp, bottom = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -1056,7 +1138,10 @@ class MainActivity : ComponentActivity() {
     private fun Appointments(p: Palette) {
         val filtered = bookings.filter { b ->
             val ok = when (bookingFilter) {
-                "Đang chờ" -> !b.cancelled() && !b.completed() && !b.noShow()
+                "Đang chờ" -> !b.cancelled() && !b.completed() && !b.noShow() &&
+                    (!staffAccount || b.optString("serviceStage", "pending") == "pending")
+                "Đã đến" -> !b.cancelled() && !b.completed() && !b.noShow() && b.optString("serviceStage") == "arrived"
+                "Đang làm" -> !b.cancelled() && !b.completed() && !b.noShow() && b.optString("serviceStage") == "serving"
                 "Hoàn thành" -> !b.cancelled() && b.completed() && !b.noShow()
                 "Không đến" -> !b.cancelled() && b.noShow()
                 "Đã hủy" -> b.cancelled()
@@ -1065,7 +1150,8 @@ class MainActivity : ComponentActivity() {
             val hay = listOf(b.optString("name"), b.optString("phone"), b.optString("service")).joinToString(" ").lowercase()
             ok && (bookingSearch.isBlank() || hay.contains(bookingSearch.lowercase()))
         }.sortedWith(compareBy<JSONObject> { it.optString("time") }.thenBy { displayName(it) }.thenBy { it.optString("id") })
-        val names = listOf("Tất cả", "Đang chờ", "Hoàn thành", "Không đến", "Đã hủy")
+        val names = if (staffAccount) listOf("Tất cả", "Đang chờ", "Đã đến", "Đang làm", "Hoàn thành", "Không đến", "Đã hủy")
+            else listOf("Tất cả", "Đang chờ", "Hoàn thành", "Không đến", "Đã hủy")
         LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
@@ -1213,6 +1299,68 @@ class MainActivity : ComponentActivity() {
     private fun BookingDetail(p: Palette, b: JSONObject) {
         var confirmCancel by remember(b.optString("id")) { mutableStateOf(false) }
         var confirmOutcome by remember(b.optString("id")) { mutableStateOf(false) }
+        var confirmComplete by remember(b.optString("id")) { mutableStateOf(false) }
+        var confirmBookingReward by remember(b.optString("id")) { mutableStateOf(false) }
+        var updating by remember(b.optString("id")) { mutableStateOf(false) }
+        val bookingScope = rememberCoroutineScope()
+        val stage = b.optString("serviceStage", "pending")
+        val date = runCatching { LocalDate.parse(b.optString("date")) }.getOrNull()
+        val today = LocalDate.now(zone)
+        val start = runCatching { LocalTime.parse(b.optString("time")) }.getOrNull()
+        val started = date != null && (
+            date < today || (date == today && (stage in listOf("arrived", "serving") ||
+                (start != null && !start.isAfter(LocalTime.now(zone)))))
+        )
+        fun saveStage(next: String) {
+            if (updating) return
+            updating = true
+            bookingScope.launch {
+                try {
+                    val fields = JSONObject().put("id", b.optString("id"))
+                        .put("revision", b.optInt("operationRevision", 0)).put("stage", next)
+                    val result = withContext(Dispatchers.IO) { api.call("adminOperationSave", JSONArray().put(fields)) }
+                    if (result.optString("id") != b.optString("id") || result.optString("stage") != next) {
+                        toast("Máy chủ chưa xác nhận trạng thái mới.")
+                    }
+                    reloadDay()
+                } catch (_: ApiClient.AuthException) {
+                    openLogin()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    toast(e.message ?: "Không cập nhật được trạng thái.")
+                    reloadDay()
+                } finally { updating = false }
+            }
+        }
+        fun complete(reward: Boolean) {
+            if (updating || !started || b.noShow()) return
+            updating = true
+            bookingScope.launch {
+                try {
+                    val options = JSONObject().put("reconcile", false).put("rewardConfirmed", reward)
+                    val result = withContext(Dispatchers.IO) {
+                        api.call("adminCompleteBooking", JSONArray().put(b.optString("id")).put(options))
+                    }
+                    if (result.optBoolean("confirmationRequired")) {
+                        confirmBookingReward = true
+                    } else if (result.optString("id") == b.optString("id")) {
+                        reloadDay()
+                        memberRefresh++
+                    } else {
+                        toast("Chưa xác nhận được mã lịch đã cập nhật.")
+                        reloadDay()
+                    }
+                } catch (_: ApiClient.AuthException) {
+                    openLogin()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    toast(e.message ?: "Chưa xác nhận được hoàn thành lịch.")
+                    reloadDay()
+                } finally { updating = false }
+            }
+        }
         val ended = runCatching {
             val date = LocalDate.parse(b.optString("date"))
             val end = LocalTime.parse(b.optString("endTime"))
@@ -1251,8 +1399,21 @@ class MainActivity : ComponentActivity() {
                 VIPPanel(p) {
                     Text("Quản lý lịch", fontWeight=FontWeight.SemiBold, color=p.ink)
                     Spacer(Modifier.height(9.dp))
+                    if (!b.noShow()) {
+                        when (stage) {
+                            "arrived" -> {
+                                TextButton(onClick = { saveStage("pending") }, enabled = !updating) { Text("Về Chờ") }
+                                OutlinedButton(onClick = { saveStage("serving") }, enabled = !updating && started) { Text("Bắt đầu phục vụ") }
+                            }
+                            "serving" -> TextButton(onClick = { saveStage("arrived") }, enabled = !updating) { Text("Về Đã đến") }
+                            else -> OutlinedButton(onClick = { saveStage("arrived") }, enabled = !updating && date != null && date <= today) { Text("Đã đến") }
+                        }
+                        Button(onClick = { confirmComplete = true }, enabled = !updating && started) {
+                            Text("Hoàn thành lịch")
+                        }
+                    }
                     TextButton(onClick={openBookingEditor(b)}) { Text("Đổi ngày / giờ") }
-                    TextButton(onClick={confirmOutcome=true}, enabled=ended || b.noShow()) {
+                    TextButton(onClick={confirmOutcome=true}, enabled=!updating && (b.noShow() || (ended && stage == "pending"))) {
                         Text(if(b.noShow()) "Bỏ đánh dấu không đến" else "Đánh dấu khách không đến")
                     }
                     if(!ended) Text("Chỉ đánh dấu không đến sau khi giờ hẹn kết thúc.",
@@ -1263,6 +1424,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (confirmComplete) AlertDialog(
+            onDismissRequest = { confirmComplete = false },
+            title = { Text("Xác nhận hoàn thành lịch?") },
+            text = { Text("Nếu có thẻ hợp lệ, hệ thống sẽ ghi lượt tích điểm cho khách.") },
+            confirmButton = { TextButton(onClick = { confirmComplete = false; complete(false) }) { Text("Xác nhận") } },
+            dismissButton = { TextButton(onClick = { confirmComplete = false }) { Text("Quay lại") } }
+        )
+        if (confirmBookingReward) AlertDialog(
+            onDismissRequest = { confirmBookingReward = false },
+            title = { Text("Ưu đãi lượt thứ 6") },
+            text = { Text("Bạn đã giảm 10 € cho khách khi thanh toán chưa?") },
+            confirmButton = { TextButton(onClick = { confirmBookingReward = false; complete(true) }) { Text("Đã giảm 10 €") } },
+            dismissButton = { TextButton(onClick = { confirmBookingReward = false }) { Text("Để sau") } }
+        )
         if(confirmCancel) AlertDialog(onDismissRequest={confirmCancel=false},
             title={Text("Hủy lịch hẹn?")},
             text={Text("Hủy lịch của "+displayName(b)+" lúc "+b.optString("time")+"?")},
@@ -1323,6 +1498,65 @@ class MainActivity : ComponentActivity() {
                     StepLine(p, "02", "Kiểm tra thành viên", "Xem hạng VIP, số lượt và lịch sử")
                     HorizontalDivider(color = p.border)
                     StepLine(p, "03", "Xác nhận thao tác", "Chỉ ghi lượt khi bạn chủ động xác nhận")
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun StaffHome(p: Palette) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            SectionTitle(p, "Lịch làm việc", selectedDay.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")))
+            DaySelector(p)
+            VIPPanel(p) {
+                LabelLine(p, "Đang chờ", bookings.count { !it.cancelled() && !it.completed() && !it.noShow() && it.optString("serviceStage", "pending") == "pending" }.toString())
+                LabelLine(p, "Đang làm", bookings.count { !it.cancelled() && !it.completed() && !it.noShow() && it.optString("serviceStage") == "serving" }.toString())
+                LabelLine(p, "Hoàn thành", bookings.count { it.completed() }.toString())
+                Button(onClick = { tab = 1; bookingFilter = "Tất cả" }) { Text("Xem lịch hẹn") }
+                OutlinedButton(onClick = { openBookingEditor() }) { Text("Thêm lịch hẹn") }
+            }
+            TextButton(onClick = ::logout) { Text("Đăng xuất") }
+        }
+    }
+
+    @Composable
+    private fun StaffDirectory(p: Palette) {
+        var query by rememberSaveable { mutableStateOf("") }
+        var rows by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+        var loadingDirectory by remember { mutableStateOf(true) }
+        var error by remember { mutableStateOf("") }
+        val today = LocalDate.now(zone)
+        LaunchedEffect(today) {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    api.callArray("adminList", JSONArray().put(today.minusDays(30).toString()).put(today.toString()))
+                }
+                rows = (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+                    .sortedByDescending { it.optString("date") + it.optString("time") }
+                    .distinctBy { normalizePhone(it.optString("phone")) }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { error = e.message ?: "Không tải được hồ sơ khách." }
+            finally { loadingDirectory = false }
+        }
+        val visible = rows.filter { row ->
+            normalizePhone(row.optString("phone")) != null &&
+                (displayName(row).contains(query, ignoreCase = true) || row.optString("phone").contains(query))
+        }
+        LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                SectionTitle(p, "Khách hàng", "Khách có lịch trong 30 ngày gần đây")
+                OutlinedTextField(query, { query = it }, label = { Text("Tên hoặc số điện thoại") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true)
+            }
+            if (loadingDirectory) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            if (error.isNotBlank()) item { Text(error, color = MaterialTheme.colorScheme.error) }
+            if (!loadingDirectory && error.isBlank() && visible.isEmpty()) item { Text("Không có khách phù hợp.", color = p.secondary) }
+            items(visible, key = { normalizePhone(it.optString("phone"))!! }) { row ->
+                VIPPanel(p) {
+                    Text(displayName(row), fontWeight = FontWeight.SemiBold, color = p.ink)
+                    LabelLine(p, "Lịch gần nhất", row.optString("date") + " · " + row.optString("service"))
+                    TextButton(onClick = { selectedMember = normalizePhone(row.optString("phone")) }) { Text("Mở thẻ khách") }
                 }
             }
         }
@@ -1550,6 +1784,7 @@ class MainActivity : ComponentActivity() {
         var confirmDuplicate by remember(phone) { mutableStateOf<JSONObject?>(null) }
         var bookingChoices by remember(phone) { mutableStateOf<List<JSONObject>>(emptyList()) }
         var feedback by remember(phone) { mutableStateOf("") }
+        val visitLimit = if (staffAccount) 5 else 6
         var busy by remember(phone) { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
@@ -1561,7 +1796,7 @@ class MainActivity : ComponentActivity() {
                 }
                 card = if (results.length() == 1) results.optJSONObject(0) else null
                 feedback = if (results.length() > 1) "Có nhiều thẻ trùng số. Hãy xử lý trên website." else if(results.length()==0) "Không tìm thấy thẻ." else ""
-                noShowCount = try {
+                noShowCount = if (staffAccount) null else try {
                     val details = withContext(Dispatchers.IO) {
                         api.callArray("adminNoShowCustomerInfo", JSONArray().put(JSONArray().put(phone)))
                     }
@@ -1633,7 +1868,7 @@ class MainActivity : ComponentActivity() {
                             IconButton(onClick={ count=(count-1).coerceAtLeast(1) },enabled=count>1&&!busy){
                                 Icon(Icons.Default.RemoveCircleOutline,null,tint=p.accent)
                             }
-                            IconButton(onClick={ count=(count+1).coerceAtMost(6) },enabled=count<6&&!busy){
+                            IconButton(onClick={ count=(count+1).coerceAtMost(visitLimit) },enabled=count<visitLimit&&!busy){
                                 Icon(Icons.Default.AddCircleOutline,null,tint=p.accent)
                             }
                         }
@@ -1648,7 +1883,7 @@ class MainActivity : ComponentActivity() {
                         ){Text("Tích điểm +" + count)}
                     }
                 }
-                item {
+                if (!staffAccount) item {
                     VIPPanel(p) {
                         Text("Hạng thành viên · website",fontWeight=FontWeight.SemiBold,color=p.ink)
                         Spacer(Modifier.height(10.dp))
@@ -1689,7 +1924,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                item {
+                if (!staffAccount) item {
                     VIPPanel(p) {
                         Text("Quản lý thẻ",fontWeight=FontWeight.SemiBold,color=p.ink)
                         Spacer(Modifier.height(8.dp))
