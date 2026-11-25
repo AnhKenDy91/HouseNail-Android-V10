@@ -97,6 +97,46 @@ final class ApiClient {
         throw new Exception("Dữ liệu API không phải danh sách.");
     }
 
+    JSONObject staffAuthAction(String action, JSONObject fields) throws Exception {
+        if (!java.util.Arrays.asList("staffList", "staffAudit", "staffCreate", "staffSetDisabled", "staffResetPassword").contains(action))
+            throw new IllegalArgumentException("Unsupported staff action");
+        HttpURLConnection conn = open(AUTH);
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            applyOwnerCookie(conn);
+            JSONObject payload = fields == null ? new JSONObject() : new JSONObject(fields.toString());
+            payload.put("action", action);
+            write(conn, payload);
+            int code = conn.getResponseCode();
+            if (code == 403) throw new Exception("Chỉ chủ tiệm được quản lý nhân viên.");
+            if (isAuthCode(code)) throw new AuthException();
+            String type = conn.getHeaderField("Content-Type");
+            if (type == null || !type.toLowerCase(java.util.Locale.ROOT).contains("application/json"))
+                throw new Exception("Máy chủ trả dữ liệu không hợp lệ.");
+            JSONObject reply = new JSONObject(readAll(code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream()));
+            if (code < 200 || code >= 300 || !reply.optBoolean("ok", false))
+                throw new Exception(reply.optString("error", "Máy chủ từ chối yêu cầu."));
+            storeRenewedCookie(conn);
+            return reply;
+        } finally { conn.disconnect(); }
+    }
+
+    static String makePasswordProof(String email, String password) throws Exception {
+        String normalized = email.trim().toLowerCase(java.util.Locale.ROOT);
+        if (password.isEmpty()) throw new IllegalArgumentException("Mật khẩu trống.");
+        javax.crypto.spec.PBEKeySpec spec = new javax.crypto.spec.PBEKeySpec(password.toCharArray(),
+            ("HouseNail-V265-client|" + normalized).getBytes(StandardCharsets.UTF_8), 310000, 256);
+        byte[] bytes = null;
+        try {
+            bytes = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+            return android.util.Base64.encodeToString(bytes, android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP | android.util.Base64.NO_PADDING);
+        } finally {
+            spec.clearPassword();
+            if (bytes != null) java.util.Arrays.fill(bytes, (byte) 0);
+        }
+    }
+
     private JSONObject authAction(String action) throws Exception {
         HttpURLConnection conn = open(AUTH);
         conn.setRequestMethod("POST");

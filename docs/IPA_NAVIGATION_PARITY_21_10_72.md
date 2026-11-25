@@ -1,0 +1,2 @@
+# Navigation parity
+iOS reference 21.10.72 (9efef2c). Android 21.10.72.8 adds native staff administration (list, audit, create, lock/unlock, reset), same auth route and PBKDF2 protocol; owner-only navigation. Website and booking controls share a segmented hub; capacity, service duration, notice, cleanup are separate destinations. Existing API calls retained. No live mutation testing or UI screenshot comparison; remaining gaps include staff live QR, staff directory, exact booking/member cards, notification diagnostics and settings composition. No changes to iOS or website.

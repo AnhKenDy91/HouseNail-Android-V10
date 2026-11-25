@@ -552,6 +552,9 @@ class MainActivity : ComponentActivity() {
                             when {
                                 selectedBooking != null -> BookingDetail(p, selectedBooking!!)
                                 selectedMember != null -> MemberDetail(p, selectedMember!!)
+                                !staffAccount && screen == "staff-management" -> StaffManagementScreen(api, ::openLogin)
+                                !staffAccount && screen == "booking-hub" -> BookingOperationsHub(p)
+                                !staffAccount && screen == "booking-capacity" -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { BookingCapacitySettings(p) }
                                 screen == "booking-control" -> BookingControlScreen(p)
                                 screen == "website-access" -> WebsiteAccessScreen(p)
                                 !staffAccount && screen.startsWith("customer-history:") -> OwnerCustomerHistory(
@@ -618,6 +621,11 @@ class MainActivity : ComponentActivity() {
             screen == "insights" -> if(insightSelected==null)"Khách hàng 360°" else insightSelected!!
             screen == "diagnostics" -> "Chẩn đoán kết nối"
             screen == "sync" -> "Trung tâm đồng bộ"
+            screen == "staff-management" -> "Quản lý nhân viên"
+            screen == "booking-hub" -> "Quản lý website & lịch"
+            screen == "booking-capacity" -> "Sức chứa & đặt lịch nhóm"
+            screen == "services" -> "Dịch vụ nhận lịch"
+            screen == "waitlist" -> "Danh sách chờ"
             tab == 0 -> if (staffAccount) "Tổng quan" else "Trang chủ"
             tab == 1 -> "Lịch hẹn"
             tab == 2 -> if (staffAccount) "Khách hàng" else "Quét QR"
@@ -2504,7 +2512,27 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun BookingControlScreen(p: Palette) {
+    private fun BookingOperationsHub(p: Palette) {
+        var section by rememberSaveable { mutableIntStateOf(0) }
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Khóa website & lịch", "Giờ & ngày nghỉ").forEachIndexed { index, label ->
+                    FilterChip(selected = section == index, onClick = { section = index }, label = { Text(label, fontSize = 12.sp, maxLines = 1) }, modifier = Modifier.weight(1f))
+                }
+            }
+            if (section == 0) Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                WebsiteAccessScreen(p, embedded = true)
+                BookingControlScreen(p, embedded = true)
+                Spacer(Modifier.height(24.dp))
+            } else Box(Modifier.weight(1f)) {
+                OwnerTools({ action, args -> withContext(Dispatchers.IO) { api.call(action, args) } }, "hours",
+                    { if (it != "hours") screen = "owner-tools:" + it }, ::openLogin, ::reloadDay)
+            }
+        }
+    }
+
+    @Composable
+    private fun BookingControlScreen(p: Palette, embedded: Boolean = false) {
         var status by remember { mutableStateOf<JSONObject?>(null) }
         var busy by remember { mutableStateOf(true) }
         var saving by remember { mutableStateOf(false) }
@@ -2565,9 +2593,7 @@ class MainActivity : ComponentActivity() {
                 }) { Text("Xác nhận") }},
                 dismissButton={TextButton(onClick={pending=null}) { Text("Hủy") }})
         }
-        LazyColumn(contentPadding=PaddingValues(16.dp),
-            verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            item {
+        val panel: @Composable () -> Unit = {
                 VIPPanel(p) {
                     SectionTitle(p,"Kiểm soát đặt lịch","Chỉ điều khiển lịch trực tuyến")
                     if(busy || saving) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -2624,12 +2650,13 @@ class MainActivity : ComponentActivity() {
                         Text("Tải lại trạng thái")
                     }
                 }
-            }
         }
+        if (embedded) panel()
+        else LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { item { panel() } }
     }
 
     @Composable
-    private fun WebsiteAccessScreen(p: Palette) {
+    private fun WebsiteAccessScreen(p: Palette, embedded: Boolean = false) {
         var enabled by remember { mutableStateOf<Boolean?>(null) }
         var busy by remember { mutableStateOf(true) }
         var saving by remember { mutableStateOf(false) }
@@ -2691,9 +2718,7 @@ class MainActivity : ComponentActivity() {
                 }){Text("Xác nhận")}},
                 dismissButton={TextButton(onClick={pending=null}){Text("Hủy")}})
         }
-        LazyColumn(contentPadding=PaddingValues(16.dp),
-            verticalArrangement=Arrangement.spacedBy(14.dp)) {
-            item {
+        val panel: @Composable () -> Unit = {
                 VIPPanel(p) {
                     SectionTitle(p,"Website công khai","Kiểm soát truy cập của khách hàng")
                     Text("Khi tạm đóng, chủ tiệm và nhân viên vẫn có thể sử dụng trang quản trị.",
@@ -2716,8 +2741,9 @@ class MainActivity : ComponentActivity() {
                         Text("Tải lại trạng thái")
                     }
                 }
-            }
         }
+        if (embedded) panel()
+        else LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { item { panel() } }
     }
 
     @Composable
@@ -3172,53 +3198,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            item { BookingCapacitySettings(p) }
-            item {
-                SettingsGroup(p, "Kiểm soát nhận lịch") {
-                    TextButton(onClick={screen="booking-control"},modifier=Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.EventBusy,null,tint=p.accent)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Khóa / mở đặt lịch trực tuyến",color=p.ink)
-                        Spacer(Modifier.weight(1f))
-                        Icon(Icons.Default.ChevronRight,null,tint=p.secondary)
-                    }
-                    Text("Toàn website, hôm nay hoặc ngày được chọn. Không xóa lịch cũ.",
-                        fontSize=12.sp,color=p.secondary)
-                }
-            }
-            item {
-                SettingsGroup(p, "Website công khai") {
-                    TextButton(onClick={screen="website-access"},modifier=Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.Public,null,tint=p.accent)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Mở / đóng website cho khách",color=p.ink)
-                        Spacer(Modifier.weight(1f))
-                        Icon(Icons.Default.ChevronRight,null,tint=p.secondary)
-                    }
-                    Text("Chỉ thay đổi truy cập công khai, giữ nguyên API quản trị.",
-                        fontSize=12.sp,color=p.secondary)
-                }
-            }
-            item {
-                SettingsGroup(p, "Quản lý website & khóa lịch") {
-                    SettingsLink(p, "Giờ mở cửa & ngày nghỉ", Icons.Default.Schedule) { screen = "owner-tools:hours" }
-                    SettingsLink(p, "Thông báo website", Icons.Default.Notifications) { screen = "owner-tools:notice" }
-                    SettingsLink(p, "Thời lượng từng dịch vụ", Icons.Default.Timer) { screen = "owner-tools:duration" }
-                    SettingsLink(p, "Xóa lịch", Icons.Default.DeleteOutline) { screen = "owner-tools:cleanup" }
-                    SettingsLink(p, "Công cụ quản trị khác", Icons.Default.Settings) { screen = "owner-tools:" }
-                }
-                SettingsGroup(p, "Dịch vụ đặt lịch trực tuyến") {
-                    TextButton(onClick={screen="services"},modifier=Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.Tune,null,tint=p.accent)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Bật / tắt nhóm dịch vụ",color=p.ink)
-                        Spacer(Modifier.weight(1f))
-                        Icon(Icons.Default.ChevronRight,null,tint=p.secondary)
-                    }
-                    Text("Làm móng · Làm mi · Gội đầu. Trạng thái lưu trên website.",
-                        fontSize=12.sp,color=p.secondary)
-                }
-            }
+            item { SettingsDestination(p, "Quản lý website & khóa lịch", "Đóng website, khóa ngày/tháng, giờ mở cửa & ngày nghỉ", Icons.Default.CalendarMonth) { screen = "booking-hub" } }
+            item { SettingsDestination(p, "Thông báo website", "Đăng hoặc ẩn thông báo khuyến mại và dịch vụ", Icons.Default.Notifications) { screen = "owner-tools:notice" } }
+            item { SettingsGroup(p, "Dịch vụ nhận lịch") {
+                SettingsLink(p, "Bật / tắt nhóm dịch vụ", Icons.Default.Tune) { screen = "services" }
+            } }
+            item { SettingsDestination(p, "Sức chứa & đặt lịch nhóm", "Chọn số khách có thể đặt lịch cùng giờ", Icons.Default.Groups) { screen = "booking-capacity" } }
+            item { SettingsDestination(p, "Thời lượng từng dịch vụ", "Sửa phút cho móng tay, móng chân, gội đầu, làm mi", Icons.Default.Schedule) { screen = "owner-tools:duration" } }
+            item { SettingsDestination(p, "Xóa lịch", "Chọn phạm vi · giữ nguyên điểm và thẻ", Icons.Default.DeleteOutline) { screen = "owner-tools:cleanup" } }
             item {
                 SettingsGroup(p, "Danh sách chờ từ website") {
                     TextButton(onClick={screen="waitlist"},modifier=Modifier.fillMaxWidth()) {
@@ -3349,6 +3336,8 @@ class MainActivity : ComponentActivity() {
             }
             item {
                 SettingsGroup(p,"Nhân viên & báo cáo"){
+                    SettingsLink(p, "Tài khoản và quyền nhân viên", Icons.Default.Groups) { screen = "staff-management" }
+                    HorizontalDivider(color = p.border)
                     SettingsLink(p, "Đối chiếu tích điểm", Icons.Default.CreditCard) { screen = "owner-tools:loyalty" }
                     TextButton(onClick={reportSelected=null;screen="reports"},modifier=Modifier.fillMaxWidth()){
                         Icon(Icons.Default.BarChart,null)
@@ -3641,6 +3630,22 @@ class MainActivity : ComponentActivity() {
                 Icon(Icons.Default.QrCodeScanner, null, tint = p.ink, modifier = Modifier.size(18.dp))
                 Icon(Icons.Default.Groups, null, tint = p.ink, modifier = Modifier.size(18.dp))
             }
+        }
+    }
+
+    @Composable
+    private fun SettingsDestination(p: Palette, title: String, subtitle: String, symbol: ImageVector, onClick: () -> Unit) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(p.surface)
+            .border(1.dp, p.accent.copy(alpha = .13f), RoundedCornerShape(18.dp)).clickable(onClick = onClick).padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(p.accent.copy(alpha = .10f)), contentAlignment = Alignment.Center) {
+                Icon(symbol, null, tint = p.accent, modifier = Modifier.size(23.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = p.ink)
+                Text(subtitle, fontSize = 12.sp, color = p.secondary)
+            }
+            Icon(Icons.Default.ChevronRight, null, tint = p.secondary, modifier = Modifier.size(18.dp))
         }
     }
 
