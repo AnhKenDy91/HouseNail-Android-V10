@@ -36,6 +36,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import java.time.Instant
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Alignment
@@ -94,6 +99,9 @@ class MainActivity : ComponentActivity() {
     private var memberPage by mutableIntStateOf(1)
     private var memberTotal by mutableIntStateOf(0)
     private var memberQuery = ""
+    private var memberLoading by mutableStateOf(false)
+    private var memberRequest = 0
+    private var memberHasMore by mutableStateOf(false)
     private var memberRefresh by mutableIntStateOf(0)
     private var bookingFilter by mutableStateOf("Tất cả")
     private var bookingSearch by mutableStateOf("")
@@ -254,28 +262,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadMembers(query: String = "", loadMore: Boolean = false) {
-        if (loading && loadMore) return
-        loading = true
-        val page = if (loadMore) memberPage + 1 else 1
+    private fun loadMembers(query: String = memberQuery, loadMore: Boolean = false, preservePages: Boolean = true) {
+        if (loadMore && (memberLoading || !memberHasMore)) return
+        val request = ++memberRequest
+        memberLoading = true
         val requested = if (loadMore) memberQuery else query
-        lifecycleScope.launch(Dispatchers.IO) {
+        val lastPage = if (!loadMore && preservePages && requested == memberQuery) memberPage else 1
+        val firstPage = if (loadMore) memberPage + 1 else 1
+        val current = if (loadMore) members else emptyList()
+        lifecycleScope.launch {
             try {
-                val result = api.call("adminLoyaltyList", JSONArray().put(page).put(requested))
-                val arr = result.optJSONArray("items") ?: JSONArray()
-                val list = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
-                withContext(Dispatchers.Main) {
-                    members = if (loadMore) (members + list).distinctBy { it.optString("cardId") } else list
-                    memberTotal = result.optInt("total", list.size)
-                    memberPage = result.optInt("page", page)
-                    memberQuery = requested
-                }
+                val loaded = current.toMutableList()
+                var page = firstPage
+                var result: JSONObject
+                do {
+                    result = withContext(Dispatchers.IO) {
+                        api.call("adminLoyaltyList", JSONArray().put(page).put(requested))
+                    }
+                    if (request != memberRequest) return@launch
+                    val items = result.optJSONArray("items") ?: JSONArray()
+                    loaded += (0 until items.length()).mapNotNull { items.optJSONObject(it) }
+                    page = result.optInt("page", page) + 1
+                } while (page <= lastPage && (page - 1) * result.optInt("pageSize", 250) < result.optInt("total"))
+                members = loaded.distinctBy { it.optString("cardId") }
+                memberTotal = result.optInt("total", members.size)
+                memberPage = page - 1
+                memberHasMore = memberPage * result.optInt("pageSize", 250) < memberTotal
+                memberQuery = requested
             } catch (_: ApiClient.AuthException) {
-                withContext(Dispatchers.Main) { openLogin() }
+                if (request == memberRequest) openLogin()
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { toast(e.message ?: "Không tải được khách hàng.") }
+                if (request == memberRequest) toast(e.message ?: "Không tải được khách hàng.")
             } finally {
-                withContext(Dispatchers.Main) { loading = false }
+                if (request == memberRequest) memberLoading = false
             }
         }
     }
@@ -375,7 +394,7 @@ class MainActivity : ComponentActivity() {
         val scan = IntentIntegrator.parseActivityResult(requestCode, resultCode, data)
         if (scan != null) {
             scan.contents?.let {
-                val phone = normalizePhone(it)
+                val phone = memberIdentifier(it)
                 if (phone == null) toast("Mã QR không hợp lệ.")
                 else {
                     selectedMember = phone
@@ -455,6 +474,7 @@ class MainActivity : ComponentActivity() {
                         topBar = { V10TopBar(p) },
                         bottomBar = { V10TabBar(p) }
                     ) { pad ->
+                        val tabState = rememberSaveableStateHolder()
                         Box(Modifier.padding(pad).fillMaxSize()) {
                             when {
                                 selectedBooking != null -> BookingDetail(p, selectedBooking!!)
@@ -468,11 +488,11 @@ class MainActivity : ComponentActivity() {
                                 screen == "insights" -> Insights(p)
                                 screen == "diagnostics" -> Diagnostics(p)
                                 screen == "sync" -> SyncCenter(p)
-                                tab == 0 -> Dashboard(p)
-                                tab == 1 -> Appointments(p)
-                                tab == 2 -> QuickScan(p)
-                                tab == 3 -> Customers(p)
-                                else -> MoreScreen(p)
+                                tab == 0 -> tabState.SaveableStateProvider(0) { Dashboard(p) }
+                                tab == 1 -> tabState.SaveableStateProvider(1) { Appointments(p) }
+                                tab == 2 -> tabState.SaveableStateProvider(2) { QuickScan(p) }
+                                tab == 3 -> tabState.SaveableStateProvider(3) { Customers(p) }
+                                else -> tabState.SaveableStateProvider(4) { MoreScreen(p) }
                             }
                             if (loading) {
                                 LinearProgressIndicator(
@@ -1044,7 +1064,7 @@ class MainActivity : ComponentActivity() {
             }
             val hay = listOf(b.optString("name"), b.optString("phone"), b.optString("service")).joinToString(" ").lowercase()
             ok && (bookingSearch.isBlank() || hay.contains(bookingSearch.lowercase()))
-        }.sortedWith(compareBy<JSONObject> { it.optString("time") }.thenBy { displayName(it) })
+        }.sortedWith(compareBy<JSONObject> { it.optString("time") }.thenBy { displayName(it) }.thenBy { it.optString("id") })
         val names = listOf("Tất cả", "Đang chờ", "Hoàn thành", "Không đến", "Đã hủy")
         LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1310,13 +1330,14 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Customers(p: Palette) {
-        var query by remember { mutableStateOf("") }
-        var cardFilter by remember { mutableStateOf("Tất cả") }
+        var query by rememberSaveable { mutableStateOf(memberQuery) }
+        var cardFilter by rememberSaveable { mutableStateOf("Tất cả") }
+        var creatingCard by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(Unit) { if (members.isEmpty()) loadMembers() }
         val visibleMembers = members.filter { card ->
             when(cardFilter) {
                 "VIP" -> effectiveTier(card) == "vip"
-                "Sắp đủ lượt" -> card.optString("lockStatus") != "locked" && card.optInt("cycleVisits") >= 4
+                "Sắp đủ lượt" -> card.optString("lockStatus") != "locked" && card.optInt("cycleVisits") >= 5
                 "Hoạt động" -> card.optString("lockStatus") != "locked"
                 "Đã khóa" -> card.optString("lockStatus") == "locked"
                 else -> true
@@ -1325,6 +1346,23 @@ class MainActivity : ComponentActivity() {
         val vipLoaded = members.count { effectiveTier(it) == "vip" }
         LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !creatingCard, onClick = { creatingCard = false },
+                        label = { Text("Danh sách thẻ") }, modifier = Modifier.weight(1f))
+                    FilterChip(selected = creatingCard, onClick = { creatingCard = true },
+                        label = { Text("Tạo thẻ cho khách") }, modifier = Modifier.weight(1f))
+                }
+            }
+            if (creatingCard) item {
+                CreateMemberCard(p) { cardId ->
+                    creatingCard = false
+                    selectedMember = cardId
+                    memberRefresh++
+                    loadMembers()
+                }
+            }
+            if (!creatingCard) {
             item {
                 VIPPanel(p) {
                     Row(verticalAlignment = Alignment.Top) {
@@ -1372,7 +1410,7 @@ class MainActivity : ComponentActivity() {
                             Text("Tìm trong danh sách",fontSize=12.sp)
                         }
                         OutlinedButton(onClick={
-                            val valid=normalizePhone(query)
+                            val valid=memberIdentifier(query)
                             if(valid==null)toast("Để mở trực tiếp, hãy nhập số điện thoại hợp lệ.")
                             else selectedMember=valid
                         }){Text("Mở thẻ",fontSize=12.sp)}
@@ -1393,12 +1431,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if(visibleMembers.isEmpty() && !loading) item {
+            if(visibleMembers.isEmpty() && !memberLoading) item {
                 VIPPanel(p){EmptyBlock(p,"Chưa có thẻ phù hợp","Thử bộ lọc khác hoặc tải thêm thẻ.")}
             }
             items(visibleMembers,key={it.optString("cardId")}) { card -> MemberCard(p,card) }
-            if(members.size < memberTotal && !loading) item {
-                OutlinedButton(onClick={loadMembers(loadMore=true)},modifier=Modifier.fillMaxWidth()) {
+            if(memberHasMore) item {
+                OutlinedButton(onClick={loadMembers(loadMore=true)},enabled=!memberLoading,modifier=Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.ExpandMore,null)
                     Spacer(Modifier.width(7.dp))
                     Text("Tải thêm thành viên")
@@ -1408,6 +1446,65 @@ class MainActivity : ComponentActivity() {
                 Text("Quét thẻ chỉ mở hồ sơ. Mọi thao tác cộng lượt, khóa thẻ hoặc hủy thẻ đều cần xác nhận riêng.",
                     color=p.secondary,fontSize=12.sp,modifier=Modifier.padding(vertical=10.dp))
             }
+            }
+        }
+    }
+
+    @Composable
+    private fun CreateMemberCard(p: Palette, onCreated: (String) -> Unit) {
+        var name by rememberSaveable { mutableStateOf("") }
+        var phone by rememberSaveable { mutableStateOf("") }
+        var saving by remember { mutableStateOf(false) }
+        var error by rememberSaveable { mutableStateOf("") }
+        val scope = rememberCoroutineScope()
+        VIPPanel(p) {
+            Text("Tạo thẻ thành viên", fontSize = 22.sp, fontFamily = FontFamily.Serif, color = p.ink)
+            OutlinedTextField(name, { name = it }, label = { Text("Họ và tên khách") },
+                modifier = Modifier.fillMaxWidth(), enabled = !saving, singleLine = true)
+            OutlinedTextField(phone, { phone = it }, label = { Text("Số điện thoại") },
+                modifier = Modifier.fillMaxWidth(), enabled = !saving, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
+            if (error.isNotBlank()) {
+                Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                val memberPhone = normalizePhone(phone)
+                if (memberPhone != null) TextButton(onClick = { selectedMember = memberPhone }) {
+                    Text("Tra cứu thẻ theo số này")
+                }
+            }
+            Button(modifier = Modifier.fillMaxWidth(), enabled = !saving && name.isNotBlank() && phone.isNotBlank(), onClick = {
+                val normalized = normalizePhone(phone)
+                val customer = name.trim()
+                if (customer.length !in 2..80) {
+                    error = "Nhập họ tên từ 2 đến 80 ký tự."
+                } else if (normalized == null) {
+                    error = "Nhập số điện thoại hợp lệ."
+                } else {
+                    saving = true
+                    error = ""
+                    scope.launch {
+                        try {
+                            val result = withContext(Dispatchers.IO) {
+                                val fields = JSONObject().put("name", customer).put("phone", normalized)
+                                api.call("adminLoyaltyCreateCard", JSONArray().put(fields))
+                            }
+                            val cardId = result.optString("cardId")
+                            if (cardId.isBlank()) {
+                                error = "Chưa xác nhận được thẻ mới. Hãy tra cứu theo số điện thoại."
+                            } else {
+                                name = ""
+                                phone = ""
+                                onCreated(cardId)
+                            }
+                        } catch (_: ApiClient.AuthException) {
+                            openLogin()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            error = e.message ?: "Chưa xác nhận được thao tác tạo thẻ."
+                        } finally { saving = false }
+                    }
+                }
+            }) { Text(if (saving) "Đang tạo thẻ…" else "Tạo thẻ") }
         }
     }
 
@@ -1427,9 +1524,9 @@ class MainActivity : ComponentActivity() {
                     Row {
                         Text("Hành trình thưởng", fontSize = 12.sp, color = p.ink)
                         Spacer(Modifier.weight(1f))
-                        Text(m.optInt("cycleVisits").toString() + "/5", fontSize = 12.sp, color = p.ink)
+                        Text(m.optInt("cycleVisits").toString() + "/6", fontSize = 12.sp, color = p.ink)
                     }
-                    LinearProgressIndicator(progress = { m.optInt("cycleVisits").coerceIn(0, 5) / 5f }, color = p.champagne)
+                    LinearProgressIndicator(progress = { m.optInt("cycleVisits").coerceIn(0, 6) / 6f }, color = p.champagne)
                     Row {
                         Text(m.optInt("totalVisits").toString() + " lượt đã ghi", fontSize = 12.sp, color = p.secondary)
                         Spacer(Modifier.weight(1f))
@@ -1506,7 +1603,7 @@ class MainActivity : ComponentActivity() {
                             card = updated
                             memberRefresh++
                             count = 1
-                            feedback = "Đã cập nhật tiến độ " + updated.optInt("cycleVisits") + "/5."
+                            feedback = "Đã cập nhật tiến độ " + updated.optInt("cycleVisits") + "/6."
                         }
                     }
                 } catch (e: Exception) {
@@ -1517,7 +1614,7 @@ class MainActivity : ComponentActivity() {
 
         fun needsReward(c: JSONObject): Boolean {
             val old = c.optInt("cycleVisits")
-            return (old + count) / 5 > old / 5
+            return (old + count) / 6 > old / 6
         }
 
         LazyColumn(contentPadding = PaddingValues(16.dp),
@@ -1536,13 +1633,13 @@ class MainActivity : ComponentActivity() {
                             IconButton(onClick={ count=(count-1).coerceAtLeast(1) },enabled=count>1&&!busy){
                                 Icon(Icons.Default.RemoveCircleOutline,null,tint=p.accent)
                             }
-                            IconButton(onClick={ count=(count+1).coerceAtMost(5) },enabled=count<5&&!busy){
+                            IconButton(onClick={ count=(count+1).coerceAtMost(6) },enabled=count<6&&!busy){
                                 Icon(Icons.Default.AddCircleOutline,null,tint=p.accent)
                             }
                         }
                         Text("Thao tác này có thể đánh dấu lịch hôm nay hoàn thành theo quy tắc hiện có của website.",
                             fontSize=12.sp,color=p.secondary)
-                        if(needsReward(c)) Text("Có lượt thứ 5: cần xác nhận đã giảm 50%.",
+                        if(needsReward(c)) Text("Lượt thứ 6: cần xác nhận đã giảm 10 €.",
                             fontSize=12.sp,color=p.accent)
                         Spacer(Modifier.height(12.dp))
                         Button(
@@ -1616,9 +1713,9 @@ class MainActivity : ComponentActivity() {
         }
 
         if(confirmReward) AlertDialog(onDismissRequest={confirmReward=false},
-            title={Text("Ưu đãi 50%")},
+            title={Text("Ưu đãi 10 €")},
             text={Text("Bạn đã thực sự áp dụng giảm giá cho khách chưa?")},
-            confirmButton={TextButton(onClick={confirmReward=false;addVisit(true)}){Text("Đã giảm 50% · Ghi điểm")}},
+            confirmButton={TextButton(onClick={confirmReward=false;addVisit(true)}){Text("Đã giảm 10 € · Ghi điểm")}},
             dismissButton={TextButton(onClick={confirmReward=false}){Text("Chưa giảm · Để sau")}})
         if(confirmDuplicate!=null) AlertDialog(onDismissRequest={confirmDuplicate=null},
             title={Text("Ghi thêm lượt?")},
@@ -3147,9 +3244,19 @@ class MainActivity : ComponentActivity() {
         val midnight=Color(0xFF0E131A)
         val gold=Color(0xFFE0BD7D)
         val cardId=card.optString("cardId")
+        val issueDate = remember(card.optString("createdAt")) {
+            runCatching {
+                Instant.parse(card.optString("createdAt")).atZone(zone)
+                    .format(DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy", Locale.forLanguageTag("vi-VN")))
+            }.getOrNull()
+        }
         val qr=remember(cardId) {
             runCatching {
-                val bits=QRCodeWriter().encode(cardId,BarcodeFormat.QR_CODE,256,256)
+                val id = memberIdentifier(cardId) ?: return@runCatching null
+                val payload = android.net.Uri.parse("https://housenail.sk/admin.html").buildUpon()
+                    .appendQueryParameter("tab", "loyalty").appendQueryParameter("memberPhone", id).build().toString()
+                val hints = mapOf(com.google.zxing.EncodeHintType.ERROR_CORRECTION to com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M)
+                val bits=QRCodeWriter().encode(payload,BarcodeFormat.QR_CODE,256,256,hints)
                 val image=Bitmap.createBitmap(256,256,Bitmap.Config.ARGB_8888)
                 for(x in 0 until 256) for(y in 0 until 256)
                     image.setPixel(x,y,if(bits[x,y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
@@ -3180,6 +3287,8 @@ class MainActivity : ComponentActivity() {
                         fontSize=23.sp,fontFamily=FontFamily.Serif,fontWeight=FontWeight.Medium)
                     Text("MÃ THẺ",color=gold,letterSpacing=2.sp,fontSize=9.sp)
                     Text(cardId,color=Color.White.copy(alpha=.85f),fontSize=12.sp,maxLines=2)
+                    if (issueDate != null) Text("Ngày giờ cấp thẻ: " + issueDate,
+                        color = Color.White.copy(alpha = .75f), fontSize = 11.sp)
                 }
                 if(qr!=null) Box(Modifier.size(112.dp).clip(RoundedCornerShape(12.dp))
                     .background(Color.White).padding(7.dp),contentAlignment=Alignment.Center) {
@@ -3189,9 +3298,9 @@ class MainActivity : ComponentActivity() {
             HorizontalDivider(color=gold.copy(alpha=.45f))
             Row(verticalAlignment=Alignment.CenterVertically) {
                 Text("Hành trình thưởng",color=Color.White,fontSize=12.sp,modifier=Modifier.weight(1f))
-                Text(card.optInt("cycleVisits").toString()+"/5",color=gold,fontWeight=FontWeight.Bold)
+                Text(card.optInt("cycleVisits").toString()+"/6",color=gold,fontWeight=FontWeight.Bold)
             }
-            LinearProgressIndicator(progress={card.optInt("cycleVisits").coerceIn(0,5)/5f},
+            LinearProgressIndicator(progress={card.optInt("cycleVisits").coerceIn(0,6)/6f},
                 modifier=Modifier.fillMaxWidth(),color=gold,trackColor=Color.White.copy(alpha=.18f))
             Text("Tổng "+card.optInt("totalVisits")+" lượt · Đã dùng "+
                 card.optInt("rewardsRedeemed")+" ưu đãi",fontSize=11.sp,color=Color.White.copy(alpha=.75f))
@@ -3234,6 +3343,22 @@ class MainActivity : ComponentActivity() {
         "gold" -> "Cao"
         "vip" -> "VIP"
         else -> "Thường"
+    }
+
+    private fun memberIdentifier(input: String): String? {
+        val value = input.trim()
+        if (value.matches(Regex("^HN[A-F0-9]{32}$"))) return value
+        if (value.contains("://")) {
+            val uri = runCatching { android.net.Uri.parse(value) }.getOrNull() ?: return null
+            if (!uri.scheme.equals("https", true) || !uri.host.equals("housenail.sk", true)
+                || uri.userInfo != null || (uri.port != -1 && uri.port != 443)
+                || uri.fragment != null || uri.path !in listOf("/admin.html", "/admin")) return null
+            val id = uri.getQueryParameters("memberPhone").singleOrNull() ?: return null
+            if (id.matches(Regex("^HN[A-F0-9]{32}$"))) return id
+            if (id.contains("://")) return null
+            return normalizePhone(id)
+        }
+        return normalizePhone(value)
     }
 
     private fun normalizePhone(input: String): String? {
