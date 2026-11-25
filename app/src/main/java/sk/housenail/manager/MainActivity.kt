@@ -299,7 +299,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadMembers(query: String = memberQuery, loadMore: Boolean = false, preservePages: Boolean = true) {
+    private fun loadMembers(query: String = memberQuery, loadMore: Boolean = false, preservePages: Boolean = true, silent: Boolean = false) {
         if (loadMore && (memberLoading || !memberHasMore)) return
         val request = ++memberRequest
         memberLoading = true
@@ -329,7 +329,7 @@ class MainActivity : ComponentActivity() {
             } catch (_: ApiClient.AuthException) {
                 if (request == memberRequest) openLogin()
             } catch (e: Exception) {
-                if (request == memberRequest) toast(e.message ?: "Không tải được khách hàng.")
+                if (request == memberRequest && !silent) toast(e.message ?: "Không tải được khách hàng.")
             } finally {
                 if (request == memberRequest) memberLoading = false
             }
@@ -680,7 +680,7 @@ class MainActivity : ComponentActivity() {
                                 screen = tabScreens[i] ?: "main"
                                 selectedBooking = tabBookingDetails[i]
                                 selectedMember = tabMemberDetails[i]
-                                if (i == 3 && members.isEmpty()) loadMembers()
+                                if (i == 3 && members.isEmpty() && !memberLoading) loadMembers()
                             }
                         }.padding(top = 10.dp, bottom = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1595,7 +1595,19 @@ class MainActivity : ComponentActivity() {
         var query by rememberSaveable { mutableStateOf(memberQuery) }
         var cardFilter by rememberSaveable { mutableStateOf("Tất cả") }
         var creatingCard by rememberSaveable { mutableStateOf(false) }
-        LaunchedEffect(Unit) { if (members.isEmpty()) loadMembers() }
+        LaunchedEffect(Unit) { if (members.isEmpty() && !memberLoading) loadMembers() }
+        LaunchedEffect(creatingCard) {
+            if (!creatingCard) {
+                lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    while (true) {
+                        delay(60_000L)
+                        if (authenticated && deviceUnlocked && !memberLoading && !loading && selectedMember == null) {
+                            loadMembers(silent = true)
+                        }
+                    }
+                }
+            }
+        }
         val visibleMembers = members.filter { card ->
             when(cardFilter) {
                 "VIP" -> effectiveTier(card) == "vip"
@@ -1668,7 +1680,7 @@ class MainActivity : ComponentActivity() {
                         leadingIcon={Icon(Icons.Default.Search,null)},singleLine=true)
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Button(onClick={loadMembers(query)},modifier=Modifier.weight(1f)) {
+                        Button(onClick={loadMembers(query, preservePages = false)},modifier=Modifier.weight(1f)) {
                             Text("Tìm trong danh sách",fontSize=12.sp)
                         }
                         OutlinedButton(onClick={
@@ -1693,6 +1705,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            if (members.isEmpty() && memberLoading) item {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Text("Đang tải thẻ thành viên…", color = p.secondary)
+                }
+            }
             if(visibleMembers.isEmpty() && !memberLoading) item {
                 VIPPanel(p){EmptyBlock(p,"Chưa có thẻ phù hợp","Thử bộ lọc khác hoặc tải thêm thẻ.")}
             }
@@ -1701,7 +1720,7 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(onClick={loadMembers(loadMore=true)},enabled=!memberLoading,modifier=Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.ExpandMore,null)
                     Spacer(Modifier.width(7.dp))
-                    Text("Tải thêm thành viên")
+                    Text(if (memberLoading) "Đang tải thành viên…" else "Tải thêm thành viên")
                 }
             }
             item {
