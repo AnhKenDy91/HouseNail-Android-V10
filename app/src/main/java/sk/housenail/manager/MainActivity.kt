@@ -113,7 +113,7 @@ class MainActivity : ComponentActivity() {
     private var timelineMode by mutableStateOf(true)
     private var selectedBooking by mutableStateOf<JSONObject?>(null)
     private var selectedMember by mutableStateOf<String?>(null)
-    private var themeName by mutableStateOf("pearl")
+    private var themeName by mutableStateOf("mint")
     private var lastSync by mutableStateOf<String?>(null)
     private var screen by mutableStateOf("main")
     private var reportPeriod by mutableStateOf("Tháng")
@@ -160,7 +160,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        themeName = getSharedPreferences("housenail_v10", MODE_PRIVATE).getString("theme", "pearl") ?: "pearl"
+        val themePrefs = getSharedPreferences("housenail_v10", MODE_PRIVATE)
+        val oldTheme = themePrefs.getString("theme", "mint")
+        themeName = if (!themePrefs.getBoolean("iosPaletteMigrated", false) && oldTheme == "pearl") "mint"
+            else oldTheme?.takeIf { it in setOf("mint", "pearl", "obsidian") } ?: "mint"
+        themePrefs.edit().putString("theme", themeName).putBoolean("iosPaletteMigrated", true).apply()
         lockEnabled = getSharedPreferences("housenail_v10", MODE_PRIVATE).getBoolean("deviceLock", false)
         deviceUnlocked = !lockEnabled
         // Persist a sanitized crash signature so a startup crash can be diagnosed
@@ -614,22 +618,26 @@ class MainActivity : ComponentActivity() {
             screen == "insights" -> if(insightSelected==null)"Khách hàng 360°" else insightSelected!!
             screen == "diagnostics" -> "Chẩn đoán kết nối"
             screen == "sync" -> "Trung tâm đồng bộ"
-            tab == 0 -> "Tổng quan"
+            tab == 0 -> if (staffAccount) "Tổng quan" else "Trang chủ"
             tab == 1 -> "Lịch hẹn"
             tab == 2 -> if (staffAccount) "Khách hàng" else "Quét QR"
             tab == 3 -> if (staffAccount) "Thẻ khách" else "Khách hàng"
             else -> if (staffAccount) "Quét QR" else "Cài đặt"
         }
-        CenterAlignedTopAppBar(
-            title = {
-                Column {
-                    Text(if (staffAccount) "HOUSE NAIL · NHÂN VIÊN" else "HOUSE NAIL · MANAGER", fontSize = 10.sp, letterSpacing = 2.sp, color = p.accent)
-                    Text(title, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, color = p.ink)
-                }
-            },
-            navigationIcon = {
-                if (selectedBooking != null || selectedMember != null || screen != "main") {
-                    IconButton(onClick = {
+        val online by produceState(initialValue = false) {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            while (true) {
+                val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                value = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                delay(2000)
+            }
+        }
+        val detail = selectedBooking != null || selectedMember != null || screen != "main"
+        Column(Modifier.fillMaxWidth().background(p.paper).statusBarsPadding()) {
+            Row(Modifier.fillMaxWidth().padding(start = 17.dp, end = 17.dp, top = 9.dp, bottom = 11.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(46.dp).clip(RoundedCornerShape(15.dp)).background(p.accent)
+                    .clickable(enabled = detail) {
                         when {
                             selectedBooking != null -> selectedBooking = null
                             selectedMember != null -> selectedMember = null
@@ -637,19 +645,29 @@ class MainActivity : ComponentActivity() {
                             insightSelected != null -> insightSelected = null
                             else -> screen = "main"
                         }
-                    }) { Icon(Icons.Default.ArrowBack, "Quay lại") }
+                    }, contentAlignment = Alignment.Center) {
+                    Icon(if (detail) Icons.Default.ArrowBack else Icons.Default.Eco,
+                        if (detail) "Quay lại" else "HouseNail", tint = p.paper, modifier = Modifier.size(23.dp))
                 }
-            },
-            actions = {
-                if (tab == 1 && selectedBooking == null) {
-                    IconButton(onClick = { openBookingEditor() }) { Icon(Icons.Default.AddCircle, "Thêm lịch") }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(if (staffAccount) "HOUSE NAIL · NHÂN VIÊN" else "HOUSE NAIL · MANAGER",
+                        fontSize = 10.sp, letterSpacing = 1.8.sp, color = p.accent, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(title, fontSize = 26.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold,
+                        color = p.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                IconButton(onClick = { if (tab == 3) loadMembers() else reloadDay() }) {
-                    Icon(Icons.Default.Refresh, "Đồng bộ lại")
+                if (tab == 1 && !detail) IconButton(onClick = { openBookingEditor() }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.AddCircle, "Thêm lịch", tint = p.accent, modifier = Modifier.size(22.dp))
                 }
-            },
-            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = p.paper)
-        )
+                Row(Modifier.clip(CircleShape).background(p.accent.copy(alpha = .10f))
+                    .clickable { if (tab == 3) loadMembers() else reloadDay() }
+                    .padding(horizontal = 11.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (online) Color(0xFF34A853) else Color(0xFFF59E0B)))
+                    Text(if (online) "Online" else "Offline", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = p.ink)
+                }
+            }
+            HorizontalDivider(color = p.accent.copy(alpha = .12f))
+        }
     }
 
     @Composable
@@ -657,21 +675,20 @@ class MainActivity : ComponentActivity() {
         val labels = if (staffAccount) listOf("Tổng quan", "Lịch hẹn", "Khách hàng", "Thẻ khách", "Quét QR")
             else listOf("Trang chủ", "Lịch", "Quét QR", "Khách", "Cài đặt")
         val icons = if (staffAccount) listOf(Icons.Default.GridView, Icons.Default.CalendarMonth, Icons.Default.Groups, Icons.Default.CreditCard, Icons.Default.QrCodeScanner)
-            else listOf(Icons.Default.GridView, Icons.Default.CalendarMonth, Icons.Default.QrCodeScanner, Icons.Default.Groups, Icons.Default.Tune)
+            else listOf(Icons.Default.Home, Icons.Default.CalendarMonth, Icons.Default.QrCodeScanner, Icons.Default.Groups, Icons.Default.Settings)
         Surface(color = p.surface, shadowElevation = 6.dp) {
             Row(
-                Modifier.fillMaxWidth().navigationBarsPadding().height(83.dp)
-                    .border(.5.dp, p.border),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 11.dp, end = 11.dp, top = 8.dp, bottom = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 labels.forEachIndexed { i, label ->
-                    val active = tab == i && selectedBooking == null && selectedMember == null && screen == "main"
+                    val active = tab == i
                     Column(
-                        Modifier.weight(1f).fillMaxHeight().padding(horizontal = 3.dp, vertical = 4.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(if (active) Color(0xFFDFECE7) else p.surface)
-                            .border(1.dp, if (active) Color(0xFFAAC9BD) else p.border, RoundedCornerShape(17.dp)).clickable {
+                        Modifier.weight(1f).height(59.dp)
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(if (active) p.accent.copy(alpha = .13f) else p.surface)
+                            .border(1.dp, p.accent.copy(alpha = if (active) .30f else .08f), RoundedCornerShape(15.dp)).clickable {
                             if (tab != i) {
                                 selectedBooking.let { if (it == null) tabBookingDetails.remove(tab) else tabBookingDetails[tab] = it }
                                 selectedMember.let { if (it == null) tabMemberDetails.remove(tab) else tabMemberDetails[tab] = it }
@@ -682,12 +699,12 @@ class MainActivity : ComponentActivity() {
                                 selectedMember = tabMemberDetails[i]
                                 if (i == 3 && members.isEmpty() && !memberLoading) loadMembers()
                             }
-                        }.padding(top = 10.dp, bottom = 8.dp),
+                        }.padding(vertical = 4.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically)
                     ) {
-                        Icon(icons[i], label, modifier = Modifier.size(27.dp), tint = if (active) p.accent else p.secondary)
-                        Text(label, fontSize = 11.sp, maxLines = 1, color = if (active) p.accent else p.secondary, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+                        Icon(icons[i], label, modifier = Modifier.size(if (i == 2) 24.dp else 20.dp), tint = if (active) p.accent else p.ink.copy(alpha = .63f))
+                        Text(label, fontSize = 10.sp, maxLines = 1, color = if (active) p.accent else p.ink.copy(alpha = .63f), fontWeight = if (active) FontWeight.Bold else FontWeight.Medium)
                     }
                 }
             }
@@ -699,52 +716,50 @@ class MainActivity : ComponentActivity() {
         val active = bookings.filter { !it.cancelled() }
         val waiting = active.filter { !it.completed() && !it.noShow() }
         val completed = active.count { it.completed() && !it.noShow() }
-        val cancelled = bookings.count { it.cancelled() }
         val noShows = active.count { it.noShow() }
-        val upcoming = waiting.sortedBy { it.optString("time") }.take(4)
+        val upcoming = waiting.filter {
+            selectedDay != LocalDate.now(zone) || runCatching { LocalTime.parse(it.optString("endTime")) > LocalTime.now(zone) }.getOrDefault(false)
+        }.sortedWith(compareBy<JSONObject> { it.optString("time") }.thenBy { displayName(it) }).take(4)
         val phone = active.count { it.optString("bookingSource") == "phone" }
         val web = active.size - phone
 
         LazyColumn(
-            contentPadding = PaddingValues(horizontal = 19.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 10.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(22.dp)
         ) {
             item { VIPHero(p) }
             item { VIPPanel(p) { DaySelector(p); Spacer(Modifier.height(10.dp)); HorizontalDivider(color = p.border); Spacer(Modifier.height(10.dp)); SyncBanner(p) } }
 
             item {
-                SectionTitle(p, "Nhịp làm việc", "Số liệu thực cho ngày đang chọn · chạm thẻ để xem danh sách")
+                SectionTitle(p, "Hôm nay tại HouseNail", "Chạm vào từng ô để mở đúng danh sách")
                 Spacer(Modifier.height(13.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                    MetricTile(p, "Tổng lịch", bookings.size, Icons.Default.CalendarMonth, p.accent, Modifier.weight(1f)) { bookingFilter = "Tất cả"; tab = 1 }
-                    MetricTile(p, "Đang chờ", waiting.size, Icons.Default.Schedule, Color(0xFFA6614A), Modifier.weight(1f)) { bookingFilter = "Đang chờ"; tab = 1 }
+                    MetricTile(p, "Tổng lịch hẹn", bookings.size, Icons.Default.CalendarMonth, p.accent, Modifier.weight(1f)) { bookingFilter = "Tất cả"; tab = 1 }
+                    MetricTile(p, "Đang chờ", waiting.size, Icons.Default.Schedule, p.accent, Modifier.weight(1f)) { bookingFilter = "Đang chờ"; tab = 1 }
                 }
                 Spacer(Modifier.height(11.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                    MetricTile(p, "Hoàn thành", completed, Icons.Default.Verified, Color(0xFF488C70), Modifier.weight(1f)) { bookingFilter = "Hoàn thành"; tab = 1 }
-                    MetricTile(p, "Đã hủy", cancelled, Icons.Default.EventBusy, Color(0xFFAA5C6E), Modifier.weight(1f)) { bookingFilter = "Đã hủy"; tab = 1 }
-                }
-                TextButton(onClick = { bookingFilter = "Không đến"; tab = 1 }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.PersonOff, null, tint = p.secondary)
-                    Spacer(Modifier.width(6.dp))
-                    Text("$noShows lịch không đến", color = p.secondary)
-                    Spacer(Modifier.weight(1f))
-                    Text("Xem", color = p.accent, fontWeight = FontWeight.SemiBold)
+                    MetricTile(p, "Hoàn thành", completed, Icons.Default.Verified, p.accent, Modifier.weight(1f)) { bookingFilter = "Hoàn thành"; tab = 1 }
+                    MetricTile(p, "Không đến", noShows, Icons.Default.PersonOff, Color(0xFFC27661), Modifier.weight(1f)) { bookingFilter = "Không đến"; tab = 1 }
                 }
             }
 
             item {
-                SectionTitle(p, "Một chạm, xong ngay", "Thao tác quản lý được sử dụng nhiều nhất")
+                SectionTitle(p, "Thao tác nhanh", "Chọn một mục để làm việc ngay")
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ActionTile(p, "Thêm lịch", Icons.Default.EventAvailable, true, Modifier.weight(1f)) { openBookingEditor() }
-                    ActionTile(p, "Quét QR", Icons.Default.QrCodeScanner, false, Modifier.weight(1f)) { startQr() }
+                    ActionTile(p, "Lịch mới", Icons.Default.EventAvailable, false, Modifier.weight(1f)) { openBookingEditor() }
+                    ActionTile(p, "Quét thẻ", Icons.Default.QrCodeScanner, false, Modifier.weight(1f)) { startQr() }
                     ActionTile(p, "Khách hàng", Icons.Default.Groups, false, Modifier.weight(1f)) { tab = 3; loadMembers() }
+                    ActionTile(p, "Báo cáo", Icons.Default.BarChart, false, Modifier.weight(1f)) { screen = "reports" }
                 }
             }
 
             item {
-                SectionTitle(p, "Lịch sắp tới", "Các cuộc hẹn chưa hoàn thành")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { SectionTitle(p, "Lịch hẹn sắp tới", "Thông tin thật từ hệ thống") }
+                    TextButton(onClick = { bookingFilter = "Đang chờ"; tab = 1 }) { Text("Xem tất cả", fontSize = 12.sp) }
+                }
                 Spacer(Modifier.height(12.dp))
                 VIPPanel(p) {
                     if (upcoming.isEmpty()) {
@@ -759,14 +774,14 @@ class MainActivity : ComponentActivity() {
             }
 
             item {
-                SectionTitle(p, "Nguồn khách", "Phân bổ lịch đang hoạt động trong ngày")
+                SectionTitle(p, "Tổng quan hoạt động", "Theo ngày đã chọn")
                 Spacer(Modifier.height(12.dp))
                 VIPPanel(p) {
-                    StatLine(p, "Đặt trực tuyến", web)
+                    StatLine(p, "Khách đặt trên web", web)
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(progress = { if (active.isEmpty()) 0f else web.toFloat() / active.size }, color = p.accent)
                     Spacer(Modifier.height(16.dp))
-                    StatLine(p, "Qua điện thoại", phone)
+                    StatLine(p, "Khách gọi điện", phone)
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(progress = { if (active.isEmpty()) 0f else phone.toFloat() / active.size }, color = p.champagne)
                     Spacer(Modifier.height(16.dp))
@@ -789,7 +804,7 @@ class MainActivity : ComponentActivity() {
             }
             item {
                 Text(
-                    "HOUSE NAIL  •  PRIVATE STUDIO",
+                    "HOUSE NAIL",
                     fontSize = 10.sp,
                     letterSpacing = 3.sp,
                     color = p.champagne,
@@ -802,41 +817,47 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun VIPHero(p: Palette) {
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(29.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF2E2629), p.accent)))
-        ) {
-            Canvas(Modifier.matchParentSize()) {
-                val w = size.width
-                val unit = 1.dp.toPx()
-                drawCircle(Color.White.copy(alpha = .11f), radius = 95 * unit, center = Offset(w + 8 * unit, -8 * unit), style = Stroke(unit))
-                drawCircle(p.champagne.copy(alpha = .28f), radius = 67.5f * unit, center = Offset(w - 28 * unit, 69 * unit), style = Stroke(unit))
+        val image by produceState<Bitmap?>(initialValue = null) {
+            value = withContext(Dispatchers.IO) {
+                try {
+                    val connection = java.net.URL("https://housenail.sk/images/hn-gallery-manicure-v9.webp")
+                        .openConnection() as java.net.HttpURLConnection
+                    connection.connectTimeout = 5000
+                    connection.readTimeout = 5000
+                    try {
+                        if (connection.responseCode == 200) connection.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) } else null
+                    } finally { connection.disconnect() }
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
             }
-            Column(Modifier.padding(23.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("H O U S E N A I L", fontSize = 11.sp, fontFamily = FontFamily.Serif,
-                        fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp, color = p.champagne)
-                    Spacer(Modifier.weight(1f))
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Icon(Icons.Default.CheckCircle, null, tint = Color(0xFFBFEBC4), modifier = Modifier.size(11.dp))
-                        Text(if (lastSync != null) "ĐÃ KẾT NỐI" else "CHỜ ĐỒNG BỘ",
-                            fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
-                            color = if (lastSync != null) Color(0xFFBFEBC4) else Color(0xFFFFC779))
-                    }
+        }
+        Box(Modifier.fillMaxWidth().height(225.dp).clip(RoundedCornerShape(27.dp))
+            .background(Brush.linearGradient(listOf(p.accent.copy(alpha = .12f), p.paper)))
+            .border(1.dp, p.ink.copy(alpha = .10f), RoundedCornerShape(27.dp))) {
+            Box(Modifier.align(Alignment.CenterEnd).fillMaxWidth(.68f).fillMaxHeight().background(p.surface),
+                contentAlignment = Alignment.Center) {
+                val bitmap = image
+                if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                else Icon(Icons.Default.AutoAwesome, null, tint = p.accent.copy(alpha = .40f), modifier = Modifier.size(82.dp))
+            }
+            Box(Modifier.matchParentSize().background(Brush.horizontalGradient(
+                0f to p.paper.copy(alpha = .98f), .43f to p.paper.copy(alpha = .95f),
+                .79f to p.paper.copy(alpha = .16f), 1f to Color.Transparent)))
+            Column(Modifier.fillMaxSize().padding(21.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Icon(Icons.Default.AutoAwesome, null, tint = p.accent, modifier = Modifier.size(12.dp))
+                    Text("HOUSE NAIL", fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold, color = p.accent)
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Studio quản lý", fontSize = 31.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Medium, color = Color.White)
-                    Text("Lịch hẹn, khách hàng và sự chăm sóc trong một nơi.", fontSize = 14.sp, color = Color.White.copy(alpha = .77f))
-                }
-                HorizontalDivider(color = p.champagne.copy(alpha = .4f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.CalendarMonth, null, tint = Color.White.copy(alpha = .87f), modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(selectedDay.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale("vi", "VN"))),
-                        fontSize = 12.sp, color = Color.White.copy(alpha = .87f), modifier = Modifier.weight(1f))
-                    Text("V10 VIP", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White,
-                        modifier = Modifier.clip(CircleShape).background(Color.White.copy(alpha = .12f))
-                            .padding(horizontal = 9.dp, vertical = 6.dp))
+                Spacer(Modifier.weight(1f))
+                Text("Xin chào,\nHouseNail", fontSize = 32.sp, lineHeight = 33.sp,
+                    fontFamily = FontFamily.Serif, fontWeight = FontWeight.Medium, color = p.ink)
+                Text("Một ngày thật đẹp\nbắt đầu từ những chi tiết nhỏ.", fontSize = 12.sp, color = p.ink.copy(alpha = .75f))
+                Spacer(Modifier.weight(1f))
+                Row(Modifier.clip(CircleShape).background(p.ink).clickable { openBookingEditor() }.padding(horizontal = 15.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Icon(Icons.Default.AddCircle, null, tint = p.paper, modifier = Modifier.size(14.dp))
+                    Text("Thêm lịch hẹn", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = p.paper)
                 }
             }
         }
@@ -1196,7 +1217,7 @@ class MainActivity : ComponentActivity() {
                             else -> bookings.size
                         }
                         val selected = bookingFilter == name
-                        Row(Modifier.clip(CircleShape).background(if(selected) Color(0xFF226E56) else p.surface)
+                        Row(Modifier.clip(CircleShape).background(if(selected) p.accent else p.surface)
                             .border(.8.dp, p.border, CircleShape).clickable { bookingFilter=name }
                             .padding(horizontal = 13.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(name, fontSize = 13.sp, color = if(selected) Color.White else p.ink)
@@ -1222,7 +1243,7 @@ class MainActivity : ComponentActivity() {
                             Text(name, fontSize = 12.sp,
                                 color = if(timelineMode==mode) Color.White else p.ink,
                                 modifier = Modifier.clip(RoundedCornerShape(9.dp))
-                                    .background(if(timelineMode==mode) Color(0xFF226E56) else p.surface)
+                                    .background(if(timelineMode==mode) p.accent else p.surface)
                                     .clickable { timelineMode=mode }
                                     .padding(horizontal = 10.dp, vertical = 9.dp))
                         }
@@ -1699,7 +1720,7 @@ class MainActivity : ComponentActivity() {
                         val active=cardFilter==name
                         Text(name,fontSize=13.sp,
                             color=if(active) Color.White else p.ink,
-                            modifier=Modifier.clip(CircleShape).background(if(active) Color(0xFF226E56) else p.surface)
+                            modifier=Modifier.clip(CircleShape).background(if(active) p.accent else p.surface)
                                 .border(.8.dp,p.border,CircleShape).clickable{cardFilter=name}
                                 .padding(horizontal=13.dp,vertical=10.dp))
                     }
@@ -2162,7 +2183,7 @@ class MainActivity : ComponentActivity() {
                             Text(name,color=if(name==reportPeriod)Color.White else p.ink,
                                 textAlign=TextAlign.Center,fontSize=13.sp,
                                 modifier=Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                                    .background(if(name==reportPeriod)Color(0xFF5C4047)else p.surface)
+                                    .background(if(name==reportPeriod)p.accent else p.surface)
                                     .clickable{reportPeriod=name}
                                     .padding(vertical=10.dp))
                         }
@@ -3150,12 +3171,13 @@ class MainActivity : ComponentActivity() {
                         Spacer(Modifier.weight(1f))
                         Icon(Icons.Default.ChevronRight,null,tint=p.secondary)
                     }
-                    Text("Bản V10.0.0 · Chẩn đoán API và đồng bộ",fontSize=12.sp,color=p.secondary)
+                    Text("Bản ${BuildConfig.VERSION_NAME} · Chẩn đoán API và đồng bộ",fontSize=12.sp,color=p.secondary)
                 }
             }
             item {
                 SettingsGroup(p, "Luxury Theme Studio") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = themeName == "mint", onClick = { setTheme("mint") }, label = { Text("Mint Atelier") })
                         FilterChip(selected = themeName == "pearl", onClick = { setTheme("pearl") },
                             label = { Text("Pearl Ivory") })
                         FilterChip(selected = themeName == "obsidian", onClick = { setTheme("obsidian") },
@@ -3305,7 +3327,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SectionTitle(p: Palette, title: String, subtitle: String? = null) {
         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(title, fontSize = 20.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, color = p.ink)
+            Text(title, fontSize = 23.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, color = p.ink)
             subtitle?.let { Text(it, fontSize = 12.sp, color = p.secondary) }
         }
     }
@@ -3313,14 +3335,14 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun MetricTile(p: Palette, title: String, value: Int, symbol: ImageVector, tint: Color, modifier: Modifier, onClick: () -> Unit) {
         Column(
-            modifier.clip(RoundedCornerShape(22.dp)).background(p.surface)
-                .border(.8.dp, p.border, RoundedCornerShape(22.dp))
-                .clickable { onClick() }.padding(17.dp),
-            verticalArrangement = Arrangement.spacedBy(13.dp)
+            modifier.heightIn(min = 145.dp).clip(RoundedCornerShape(21.dp)).background(p.surface)
+                .border(1.dp, p.ink.copy(alpha = .08f), RoundedCornerShape(21.dp))
+                .clickable { onClick() }.padding(15.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(verticalAlignment = Alignment.Top) {
                 Box(
-                    Modifier.size(41.dp).clip(RoundedCornerShape(14.dp))
+                    Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
                         .background(tint.copy(alpha = .12f)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -3329,26 +3351,22 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.weight(1f))
                 Icon(Icons.Default.NorthEast, null, tint = p.champagne, modifier = Modifier.size(14.dp))
             }
-            Text(value.toString(), fontSize = 34.sp, fontWeight = FontWeight.SemiBold, color = p.ink)
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = p.ink.copy(alpha = .76f))
+            Text(value.toString(), fontSize = 31.sp, fontWeight = FontWeight.SemiBold, color = p.ink)
+            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = p.ink.copy(alpha = .75f), maxLines = 1)
         }
     }
 
         @Composable
     private fun ActionTile(p: Palette, title: String, icon: ImageVector, emphasized: Boolean, modifier: Modifier, onClick: () -> Unit) {
-        Column(
-            modifier.heightIn(min = 116.dp).clip(RoundedCornerShape(21.dp)).background(if (emphasized) Color(0xFF226E56) else p.surface)
-                .border(1.dp, if (emphasized) p.champagne.copy(alpha = .6f) else p.border, RoundedCornerShape(21.dp)).clickable { onClick() }.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Box(Modifier.size(45.dp).clip(RoundedCornerShape(14.dp)).background(if (emphasized) Color.White.copy(alpha = .16f) else p.accent.copy(alpha = .10f)), contentAlignment = Alignment.Center) {
-                Icon(icon, null, tint = if (emphasized) Color.White else p.accent)
+        Column(modifier.clickable { onClick() }, horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Box(Modifier.fillMaxWidth().height(57.dp).clip(RoundedCornerShape(18.dp))
+                .background(Brush.linearGradient(listOf(p.accent.copy(alpha = .12f), p.surface)))
+                .border(.8.dp, p.accent.copy(alpha = .34f), RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center) {
+                Icon(icon, null, tint = p.ink, modifier = Modifier.size(23.dp))
             }
-            Spacer(Modifier.weight(1f))
-            Row {
-                Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (emphasized) Color.White else p.ink, modifier = Modifier.weight(1f))
-                Icon(Icons.Default.NorthEast, null, tint = if (emphasized) Color.White else p.ink, modifier = Modifier.size(13.dp))
-            }
+            Text(title, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = p.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 
@@ -3679,10 +3697,30 @@ class MainActivity : ComponentActivity() {
         val border: Color
     )
 
-    private fun palette(name: String) = if (name == "obsidian") {
-        Palette(Color(0xFF0F1113), Color(0xFF1F2126), Color(0xFFF5EFE3), Color(0xFFD6B378), Color(0xFFD6B070), Color(0xFFB9ACA4), Color(0x665C514A))
-    } else {
-        Palette(Color(0xFFF5FAF8), Color.White, Color(0xFF174D3E), Color(0xFF24755C), Color(0xFF24755C), Color(0xFF7D9390), Color(0x4024755C))
+    private fun palette(name: String): Palette {
+        val paper: Color
+        val surface: Color
+        val ink: Color
+        val accent: Color
+        val metallic: Color
+        when (name) {
+            "obsidian" -> {
+                paper = Color(.060f, .066f, .075f); surface = Color(.12f, .13f, .15f)
+                ink = Color(.96f, .94f, .89f); accent = Color(.84f, .70f, .47f)
+                metallic = Color(.84f, .69f, .44f)
+            }
+            "pearl" -> {
+                paper = Color(.995f, .978f, .976f); surface = Color.White
+                ink = Color(.22f, .17f, .20f); accent = Color(.70f, .43f, .49f)
+                metallic = Color(.79f, .63f, .55f)
+            }
+            else -> {
+                paper = Color(.966f, .984f, .977f); surface = Color.White
+                ink = Color(.11f, .32f, .27f); accent = Color(.14f, .44f, .34f)
+                metallic = Color(.75f, .60f, .42f)
+            }
+        }
+        return Palette(paper, surface, ink, accent, metallic, ink.copy(alpha = .75f), ink.copy(alpha = .12f))
     }
 
     private fun Color.toArgbCompat() = AndroidColor.argb(
