@@ -52,6 +52,8 @@ internal fun OwnerTools(
     var durationRevision by remember(mode) { mutableStateOf("") }
     var notice by remember(mode) { mutableStateOf(JSONObject()) }
     var noticeEnabled by remember(mode) { mutableStateOf(false) }
+    var noticeType by remember(mode) { mutableStateOf("promotion") }
+    var noticeExpires by remember(mode) { mutableStateOf("") }
     var language by rememberSaveable { mutableStateOf("sk") }
     var noticeTitle by remember(mode) { mutableStateOf("") }
     var noticeBody by remember(mode) { mutableStateOf("") }
@@ -59,7 +61,18 @@ internal fun OwnerTools(
     var stats by remember(mode) { mutableStateOf(JSONObject()) }
     var from by rememberSaveable { mutableStateOf(today) }
     var to by rememberSaveable { mutableStateOf(today) }
+    var cleanupMode by rememberSaveable { mutableStateOf("range") }
+    var cleanupPhone by rememberSaveable { mutableStateOf("") }
+    var cleanupId by rememberSaveable { mutableStateOf("") }
+    var cleanupFuture by rememberSaveable { mutableStateOf(false) }
     var confirmCleanup by remember { mutableStateOf(false) }
+    val cleanupModes = linkedMapOf("range" to "Khoảng ngày", "phone" to "Theo khách", "booking" to "Một lịch", "all" to "Toàn bộ")
+    val validCleanup = when (cleanupMode) {
+        "range" -> runCatching { LocalDate.parse(from) <= LocalDate.parse(to) }.getOrDefault(false)
+        "phone" -> cleanupPhone.matches(Regex("^[+0-9() .-]{8,25}$")) && cleanupPhone.count(Char::isDigit) in 8..15
+        "booking" -> cleanupId.matches(Regex("^[a-zA-Z0-9_:-]{1,160}$"))
+        else -> true
+    }
 
     fun selectLanguage(code: String) {
         language = code
@@ -98,6 +111,8 @@ internal fun OwnerTools(
             "notice" -> {
                 notice = data
                 noticeEnabled = data.optBoolean("enabled")
+                noticeType = data.optString("type", "promotion")
+                noticeExpires = data.optString("expires")
                 selectLanguage(language)
             }
             "theme" -> theme = data.optString("campaignTheme", "default")
@@ -217,13 +232,21 @@ internal fun OwnerTools(
                         }, label = { Text(code.uppercase()) }, enabled = !busy)
                     }
                 }
-                OutlinedTextField(noticeTitle, { noticeTitle = it.take(120) }, label = { Text("Tiêu đề") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(noticeBody, { noticeBody = it.take(400) }, label = { Text("Nội dung") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(noticeType == "promotion", { noticeType = "promotion" }, { Text("Khuyến mại") }, enabled = !busy)
+                    FilterChip(noticeType == "service", { noticeType = "service" }, { Text("Dịch vụ") }, enabled = !busy)
+                }
+                OutlinedTextField(noticeExpires, { noticeExpires = it.take(10) }, label = { Text("Ngày kết thúc · yyyy-MM-dd") },
+                    supportingText = { Text("Để trống nếu không giới hạn ngày.") }, singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(noticeTitle, { noticeTitle = it.take(100) }, label = { Text("Tiêu đề") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(noticeBody, { noticeBody = it.take(600) }, label = { Text("Nội dung") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
                 Button(enabled = !busy, onClick = {
                     val payload = JSONObject(notice.toString())
                     val translations = payload.optJSONObject("translations") ?: JSONObject()
                     translations.put(language, JSONObject().put("title", noticeTitle.trim()).put("body", noticeBody.trim()))
                     payload.put("translations", translations).put("enabled", noticeEnabled)
+                        .put("type", noticeType).put("expires", noticeExpires.trim())
+                        .put("revision", notice.optString("revision"))
                     run("adminSaveWebsiteNotice", JSONArray().put(payload))
                 }) { Text("Lưu thông báo") }
             }
@@ -243,22 +266,43 @@ internal fun OwnerTools(
                 if (stats.optInt("overLinkedVisits") > 0) Text("Có chênh lệch cần đối chiếu.")
             }
             "cleanup" -> {
-                Text("Xóa lịch theo khoảng ngày. Lịch đã xóa không thể khôi phục từ màn này.")
-                OutlinedTextField(from, { from = it }, label = { Text("Từ ngày · yyyy-MM-dd") }, enabled = !busy, singleLine = true)
-                OutlinedTextField(to, { to = it }, label = { Text("Đến ngày · yyyy-MM-dd") }, enabled = !busy, singleLine = true)
-                val valid = runCatching { LocalDate.parse(from) <= LocalDate.parse(to) }.getOrDefault(false)
-                OutlinedButton(enabled = valid && !busy, onClick = { confirmCleanup = true }) { Text("Xóa lịch trong khoảng ngày") }
+                Text("Chọn phạm vi xóa. Lịch đã xóa không thể khôi phục từ màn này.")
+                cleanupModes.entries.chunked(2).forEach { group ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        group.forEach { (key, label) ->
+                            FilterChip(cleanupMode == key, { cleanupMode = key }, { Text(label) }, enabled = !busy)
+                        }
+                    }
+                }
+                when (cleanupMode) {
+                    "range" -> {
+                        OutlinedTextField(from, { from = it }, label = { Text("Từ ngày · yyyy-MM-dd") }, enabled = !busy, singleLine = true)
+                        OutlinedTextField(to, { to = it }, label = { Text("Đến ngày · yyyy-MM-dd") }, enabled = !busy, singleLine = true)
+                    }
+                    "phone" -> OutlinedTextField(cleanupPhone, { cleanupPhone = it }, label = { Text("Số điện thoại khách") }, enabled = !busy, singleLine = true)
+                    "booking" -> OutlinedTextField(cleanupId, { cleanupId = it }, label = { Text("Mã lịch hẹn") }, enabled = !busy, singleLine = true)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Bao gồm lịch sắp tới", modifier = Modifier.weight(1f))
+                    Switch(cleanupFuture, { cleanupFuture = it }, enabled = !busy)
+                }
+                OutlinedButton(enabled = validCleanup && !busy, onClick = { confirmCleanup = true }) { Text("Xóa lịch") }
             }
         }
     }
     if (confirmCleanup) AlertDialog(
         onDismissRequest = { confirmCleanup = false },
-        title = { Text("Xóa lịch từ $from đến $to?") },
-        text = { Text("Điểm và thẻ thành viên vẫn được giữ. Chỉ xử lý lịch đến hôm nay.") },
+        title = { Text("Xác nhận xóa lịch · " + cleanupModes[cleanupMode]) },
+        text = { Text(if (cleanupFuture) "Phạm vi có thể bao gồm lịch sắp tới. Điểm và thẻ vẫn được giữ." else "Điểm và thẻ thành viên vẫn được giữ. Chỉ xử lý lịch đến hôm nay.") },
         confirmButton = {
             TextButton(onClick = {
                 confirmCleanup = false
-                val filter = JSONObject().put("mode", "range").put("from", from).put("to", to).put("includeFuture", false)
+                val filter = JSONObject().put("mode", cleanupMode).put("includeFuture", cleanupFuture)
+                when (cleanupMode) {
+                    "range" -> filter.put("from", from).put("to", to)
+                    "phone" -> filter.put("phone", cleanupPhone)
+                    "booking" -> filter.put("bookingId", cleanupId)
+                }
                 run("adminCleanupDelete", JSONArray().put(filter))
             }) { Text("Xác nhận xóa", color = MaterialTheme.colorScheme.error) }
         },
@@ -347,7 +391,7 @@ internal fun OwnerCustomerHistory(
                     enabled = !busy, modifier = Modifier.fillMaxWidth())
                 Button(enabled = !busy && note != controls.optString("note"), onClick = {
                     launch(update = JSONObject().put("scope", "note").put("note", note)
-                        .put("expectedRevision", controls.optInt("revision")))
+                        .put("expectedRevision", controls.optString("revision")))
                 }) { Text("Lưu ghi chú") }
                 Text(if (blocked) "Đang chặn đặt lịch" else "Được đặt lịch")
                 if (!blocked) {
@@ -381,7 +425,7 @@ internal fun OwnerCustomerHistory(
                 launch(update = JSONObject().put("scope", "phone").put("locked", !blocked)
                     .put("reason", if (blocked) "" else reason.trim())
                     .put("days", if (blocked) 0 else days)
-                    .put("expectedRevision", controls.optInt("revision")))
+                    .put("expectedRevision", controls.optString("revision")))
             }) { Text("Xác nhận") }
         },
         dismissButton = { TextButton(onClick = { confirmRestriction = false }) { Text("Hủy") } }
